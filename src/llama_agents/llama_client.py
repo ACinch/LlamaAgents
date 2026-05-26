@@ -89,3 +89,60 @@ class LlamaClient:
             tool_calls=tool_calls,
             raw_message=msg,
         )
+
+
+import asyncio as _asyncio
+import subprocess
+
+from .config import LlamaConfig
+
+
+class LlamaServerManager:
+    """Optionally spawns llama-server.exe if not already reachable."""
+
+    def __init__(self, cfg: LlamaConfig, client: "LlamaClient | object") -> None:
+        self._cfg = cfg
+        self._client = client
+        self._process: subprocess.Popen | None = None
+
+    @property
+    def spawned(self) -> bool:
+        return self._process is not None
+
+    async def ensure_running(self) -> None:
+        if await self._client.health():
+            return
+        if not self._cfg.auto_spawn:
+            raise LlamaUnreachable(
+                f"llama-server not reachable and auto_spawn=false"
+            )
+        if self._cfg.server_bin is None or self._cfg.model_path is None:
+            raise LlamaUnreachable("auto_spawn requires server_bin and model_path")
+        self._process = subprocess.Popen(
+            [
+                str(self._cfg.server_bin),
+                "-m", str(self._cfg.model_path),
+                "-ngl", str(self._cfg.ngl),
+                "-c", str(self._cfg.ctx_size),
+            ],
+        )
+        deadline = self._cfg.startup_timeout_seconds
+        for _ in range(deadline):
+            if await self._client.health():
+                return
+            await _asyncio.sleep(1)
+        raise LlamaUnreachable(
+            f"llama-server failed to become ready in {deadline}s"
+        )
+
+    async def shutdown(self) -> None:
+        if self._process is None:
+            return
+        if not self._cfg.kill_on_exit:
+            return
+        self._process.terminate()
+        try:
+            self._process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+        self._process = None
