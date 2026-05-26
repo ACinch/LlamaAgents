@@ -89,7 +89,7 @@ class Runtime:
 
     def new_agent(self) -> Agent:
         # Each agent shares the registry, but has its own conversation state.
-        return Agent(client=self.client, registry=self.registry)
+        return Agent(client=self.client, registry=self.registry.clone())
 
     async def aclose(self) -> None:
         if self.bridge is not None:

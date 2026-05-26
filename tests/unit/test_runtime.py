@@ -46,3 +46,20 @@ async def test_runtime_creates_subagent_with_isolated_registry(tmp_path: Path):
     parent = rt.new_agent()
     assert sub is not parent
     await rt.aclose()
+
+
+async def test_subagent_does_not_mutate_parent_registry(tmp_path: Path):
+    from llama_agents.config import McpServerConfig  # unused, just to keep imports tidy if needed
+    cfg = Config(
+        llama=LlamaConfig(auto_spawn=False),
+        sandbox=SandboxConfig(allowed_dirs=[tmp_path], shell_allowlist=["python"]),
+    )
+    rt = await Runtime.create(cfg, client_factory=lambda url: FakeClient())
+    parent_names_before = set(rt.registry.names())
+    # Simulate what spawn does: clone registry and unregister a tool on the clone.
+    clone = rt.registry.clone()
+    clone.unregister("subagent_spawn")
+    assert "subagent_spawn" not in clone.names()
+    assert "subagent_spawn" in rt.registry.names()
+    assert set(rt.registry.names()) == parent_names_before
+    await rt.aclose()

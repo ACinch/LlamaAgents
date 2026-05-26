@@ -41,6 +41,11 @@ class ToolRegistry:
         self._validate(tool, args)
         return await tool.invoke(args)
 
+    def clone(self) -> "ToolRegistry":
+        new = ToolRegistry()
+        new._tools = dict(self._tools)
+        return new
+
     @staticmethod
     def _validate(tool: Tool, args: dict[str, Any]) -> None:
         required = tool.json_schema.get("required", [])
