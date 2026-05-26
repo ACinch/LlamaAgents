@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from pathlib import Path
 
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
+
+for _stream in (sys.stdout, sys.stderr):
+    reconfigure = getattr(_stream, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8", errors="replace")
 
 from .agent import AgentRunOptions
 from .config import load_config
