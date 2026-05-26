@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "rag": {
+      "command": "node",
+      "args": [
+        "D:\\repos\\LLM\\rag\\dist\\index.js"
+      ]
+    }
+  }
+}
