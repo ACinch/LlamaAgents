@@ -1,0 +1,66 @@
+import textwrap
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from llama_agents.config import Config, load_config
+
+
+SAMPLE = """
+[llama]
+server_url = "http://127.0.0.1:8080"
+model = "qwen3-coder-30b"
+auto_spawn = true
+kill_on_exit = false
+server_bin = "D:/repos/LLM/llamacpp-bin/llama-server.exe"
+model_path = "D:/repos/LLM/GGUF/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf"
+ngl = 999
+ctx_size = 32768
+startup_timeout_seconds = 60
+
+[agent]
+max_iterations = 20
+max_concurrent_agents = 5
+token_budget_pct = 0.8
+
+[sandbox]
+allowed_dirs = ["D:/repos/LLM/llama-agents"]
+shell_allowlist = ["git", "pytest"]
+
+[http]
+host = "127.0.0.1"
+port = 9000
+
+[[mcp_servers]]
+name = "rag"
+command = "node"
+args = ["D:/repos/LLM/rag/dist/index.js"]
+"""
+
+
+def test_load_config_parses_full_example(tmp_path: Path):
+    p = tmp_path / "c.toml"
+    p.write_text(SAMPLE)
+    cfg = load_config(p)
+    assert isinstance(cfg, Config)
+    assert cfg.llama.server_url == "http://127.0.0.1:8080"
+    assert cfg.agent.max_concurrent_agents == 5
+    assert cfg.sandbox.shell_allowlist == ["git", "pytest"]
+    assert len(cfg.mcp_servers) == 1
+    assert cfg.mcp_servers[0].name == "rag"
+
+
+def test_load_config_rejects_bad_token_budget(tmp_path: Path):
+    p = tmp_path / "c.toml"
+    p.write_text(SAMPLE.replace("token_budget_pct = 0.8", "token_budget_pct = 1.5"))
+    with pytest.raises(ValidationError):
+        load_config(p)
+
+
+def test_load_config_normalizes_allowed_dirs(tmp_path: Path):
+    p = tmp_path / "c.toml"
+    p.write_text(SAMPLE)
+    cfg = load_config(p)
+    # Paths are absolute and use forward slashes internally on all platforms.
+    assert all(d.is_absolute() for d in cfg.sandbox.allowed_dirs)

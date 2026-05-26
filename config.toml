@@ -1,0 +1,28 @@
+[llama]
+server_url = "http://127.0.0.1:8080"
+model = "qwen3-coder-30b"
+auto_spawn = true
+kill_on_exit = false
+server_bin = "D:/repos/LLM/llamacpp-bin/llama-server.exe"
+model_path = "D:/repos/LLM/GGUF/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf"
+ngl = 999
+ctx_size = 32768
+startup_timeout_seconds = 60
+
+[agent]
+max_iterations = 20
+max_concurrent_agents = 5
+token_budget_pct = 0.8
+
+[sandbox]
+allowed_dirs = ["D:/repos/LLM/llama-agents"]
+shell_allowlist = ["git", "pytest"]
+
+[http]
+host = "127.0.0.1"
+port = 9000
+
+[[mcp_servers]]
+name = "rag"
+command = "node"
+args = ["D:/repos/LLM/rag/dist/index.js"]
