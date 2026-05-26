@@ -1,0 +1,48 @@
+import asyncio
+from pathlib import Path
+
+import pytest
+
+from llama_agents.config import Config, LlamaConfig, AgentConfig, SandboxConfig
+from llama_agents.llama_client import ChatResponse
+from llama_agents.runtime import Runtime
+
+
+class FakeClient:
+    async def chat(self, *, messages, tools, temperature=0.2):
+        return ChatResponse(content="done")
+
+    async def health(self) -> bool:
+        return True
+
+    async def aclose(self) -> None:
+        pass
+
+
+async def test_runtime_builds_registry_with_builtins(tmp_path: Path):
+    cfg = Config(
+        llama=LlamaConfig(auto_spawn=False),
+        agent=AgentConfig(max_concurrent_agents=3),
+        sandbox=SandboxConfig(allowed_dirs=[tmp_path], shell_allowlist=["python"]),
+    )
+    rt = await Runtime.create(cfg, client_factory=lambda url: FakeClient())
+    names = rt.registry.names()
+    assert "fs_read_file" in names
+    assert "fs_write_file" in names
+    assert "fs_edit_file" in names
+    assert "fs_list_files" in names
+    assert "shell_run" in names
+    assert "subagent_spawn" in names
+    await rt.aclose()
+
+
+async def test_runtime_creates_subagent_with_isolated_registry(tmp_path: Path):
+    cfg = Config(
+        llama=LlamaConfig(auto_spawn=False),
+        sandbox=SandboxConfig(allowed_dirs=[tmp_path], shell_allowlist=["python"]),
+    )
+    rt = await Runtime.create(cfg, client_factory=lambda url: FakeClient())
+    sub = rt.new_agent()
+    parent = rt.new_agent()
+    assert sub is not parent
+    await rt.aclose()
