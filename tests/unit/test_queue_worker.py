@@ -49,8 +49,9 @@ def queue_cfg(tmp_path: Path) -> QueueConfig:
 
 
 async def _wait_until(predicate, timeout=2.0):
-    start = asyncio.get_event_loop().time()
-    while asyncio.get_event_loop().time() - start < timeout:
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    while loop.time() - start < timeout:
         if predicate():
             return True
         await asyncio.sleep(0.02)
