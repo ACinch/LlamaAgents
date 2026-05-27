@@ -477,3 +477,71 @@ def test_download_model_raises_clear_error_when_module_missing(tmp_path: Path, m
     monkeypatch.setitem(sys.modules, "huggingface_hub", None)
     with pytest.raises(RuntimeError, match="huggingface_hub is not installed"):
         download_model(CATALOGUE[0], tmp_path / "GGUF")
+
+
+import tomllib
+
+from llama_agents.install import WizardResult, run_install_wizard
+
+
+def test_wizard_end_to_end_writes_valid_config(tmp_path: Path, monkeypatch):
+    from llama_agents.config import Config
+
+    # Pre-stage: pretend llama-server.exe is at a sibling path.
+    server = tmp_path / "llama.cpp" / "build" / "bin" / "Release" / "llama-server.exe"
+    server.parent.mkdir(parents=True)
+    server.write_bytes(b"\0")
+
+    # Pre-stage: pretend the L-tier model is already on disk.
+    repo = tmp_path / "llama-agents"
+    repo.mkdir()
+    spec = CATALOGUE[0]
+    model_file = repo / "GGUF" / spec.hf_filename
+    model_file.parent.mkdir()
+    model_file.write_bytes(b"\0")
+
+    # Stub VRAM detection to return 24 GB -> recommends L-tier.
+    monkeypatch.setattr("llama_agents.install.detect_vram_gb", lambda: 24.0)
+    # Stub model_search_dirs so the home-dir entry stays in the sandbox.
+    monkeypatch.setattr(
+        "llama_agents.install.model_search_dirs",
+        lambda r: [r / "GGUF", r.parent / "GGUF", tmp_path / "fake_home" / "GGUF"],
+    )
+
+    # Scripted answers, in order:
+    #   1. (no overwrite prompt — config absent)
+    #   2. confirm found llama-server binary [Y] -> "y"
+    #   3. choose model — default index 0 (L tier) -> ""  (Enter)
+    #   4. use existing model file? [Y] -> "y"
+    #   5. allowed_dirs: empty -> finish
+    #   6. accept tier defaults? [Y] -> "y"
+    p = RecordedPrompter(answers=["y", "", "y", "", "y"])
+
+    result = run_install_wizard(repo_root=repo, prompter=p, force=False)
+    assert isinstance(result, WizardResult)
+    assert result.config_path == repo / "config.toml"
+    assert result.server_bin == server
+    assert result.model_path == model_file
+    assert result.allowed_dirs == [repo.resolve()]
+    assert result.tier == "L"
+
+    # Final assertion: the written config parses cleanly.
+    data = tomllib.loads(result.config_path.read_text(encoding="utf-8"))
+    cfg = Config.model_validate(data)
+    assert cfg.llama.ctx_size == 65536
+    assert cfg.llama.n_parallel == 2
+    assert Path(cfg.llama.server_bin) == server
+    assert Path(cfg.llama.model_path) == model_file
+
+
+def test_wizard_cancels_when_user_declines_overwrite(tmp_path: Path, monkeypatch):
+    repo = tmp_path / "llama-agents"
+    repo.mkdir()
+    existing = repo / "config.toml"
+    existing.write_text("# old", encoding="utf-8")
+
+    p = RecordedPrompter(answers=["n"])
+    result = run_install_wizard(repo_root=repo, prompter=p, force=False)
+    assert result is None
+    # Existing file untouched.
+    assert existing.read_text(encoding="utf-8") == "# old"

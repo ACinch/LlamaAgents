@@ -402,3 +402,164 @@ def download_model(spec: ModelSpec, dest_dir: Path) -> Path:
         local_dir=str(dest_dir),
     )
     return Path(path_str)
+
+
+@dataclass
+class WizardResult:
+    config_path: Path
+    server_bin: Path
+    model_path: Path
+    allowed_dirs: list[Path]
+    vram_gb: float | None
+    tier: Tier
+
+
+def _present_models(
+    recommended: Tier, prompter: Prompter
+) -> ModelSpec | None:
+    """Show the catalogue, return chosen spec or None for 'user picks file'."""
+    options: list[str] = []
+    default_index = 0
+    for i, m in enumerate(CATALOGUE):
+        tag = " ← recommended" if m.tier == recommended else ""
+        flag = ""
+        if recommended == "S" and m.tier in ("L", "M"):
+            flag = "  (may not fit)"
+        elif recommended == "M" and m.tier == "L":
+            flag = "  (may not fit)"
+        options.append(f"{m.label}  (~{m.size_gb} GB){tag}{flag}")
+        if m.tier == recommended:
+            default_index = i
+    options.append("Use a local file I'll specify")
+    idx = prompter.choose(
+        "Choose model", options, default_index=default_index
+    )
+    if idx == len(CATALOGUE):
+        return None
+    return CATALOGUE[idx]
+
+
+def _resolve_server_bin(repo_root: Path, prompter: Prompter) -> Path | None:
+    """Find or ask for llama-server.exe. Returns None on cancel."""
+    found = locate_llama_server(repo_root)
+    if found is not None:
+        if prompter.confirm(
+            f"Found llama-server at {found} — use it?", default=True
+        ):
+            return found
+    # Not found or user declined: offer alternatives.
+    options = [
+        "Download a pinned llama.cpp Windows CUDA release (~250 MB)",
+        "Enter a path manually",
+        "Cancel and install it yourself",
+    ]
+    idx = prompter.choose("How would you like to proceed?", options, default_index=0)
+    if idx == 0:
+        try:
+            return download_llama_cpp(repo_root / "llamacpp-bin")
+        except Exception as e:
+            prompter.warn(f"download failed: {e}")
+            return None
+    if idx == 1:
+        raw = prompter.ask("Path to llama-server.exe", default="")
+        p = Path(raw)
+        if not p.is_file():
+            prompter.warn(f"{p} is not a file; cancelling.")
+            return None
+        return p
+    return None
+
+
+def _resolve_model_path(
+    spec: ModelSpec | None, repo_root: Path, prompter: Prompter
+) -> Path | None:
+    if spec is None:
+        raw = prompter.ask("Path to .gguf model", default="")
+        p = Path(raw)
+        if not p.is_file():
+            prompter.warn(f"{p} is not a file; cancelling.")
+            return None
+        return p
+    existing = find_existing_model(spec, repo_root)
+    if existing is not None:
+        if prompter.confirm(
+            f"Found existing model at {existing} — use it?", default=True
+        ):
+            return existing
+    if not prompter.confirm(
+        f"Download {spec.hf_filename} (~{spec.size_gb} GB) into ./GGUF/?",
+        default=True,
+    ):
+        return None
+    try:
+        return download_model(spec, repo_root / "GGUF")
+    except Exception as e:
+        prompter.warn(f"download failed: {e}")
+        return None
+
+
+def run_install_wizard(
+    *,
+    repo_root: Path,
+    prompter: Prompter,
+    force: bool = False,
+) -> WizardResult | None:
+    """Drive the full install wizard. Returns None if user cancels."""
+    config_path = repo_root / "config.toml"
+    action = existing_config_action(config_path, prompter, force=force)
+    if action == "cancel":
+        prompter.info("Setup cancelled. No changes made.")
+        return None
+
+    server_bin = _resolve_server_bin(repo_root, prompter)
+    if server_bin is None:
+        prompter.info("Setup cancelled (no llama-server).")
+        return None
+
+    vram = detect_vram_gb()
+    tier = recommend_tier(vram)
+    if vram is not None:
+        prompter.info(f"Detected GPU with {vram:.1f} GB VRAM (tier {tier}).")
+    else:
+        prompter.warn("Could not auto-detect VRAM — recommendations skipped.")
+
+    spec = _present_models(tier, prompter)
+    model_path = _resolve_model_path(spec, repo_root, prompter)
+    if model_path is None:
+        prompter.info("Setup cancelled (no model).")
+        return None
+
+    allowed = collect_allowed_dirs(repo_root, prompter)
+
+    ctx_size, n_parallel = tier_defaults(tier)
+    if not prompter.confirm(
+        f"Context window: ctx_size={ctx_size}, n_parallel={n_parallel} — use these?",
+        default=True,
+    ):
+        raw_ctx = prompter.ask("ctx_size", default=str(ctx_size))
+        raw_np = prompter.ask("n_parallel", default=str(n_parallel))
+        ctx_size = int(raw_ctx)
+        n_parallel = int(raw_np)
+
+    text = render_config_toml({
+        "server_bin": server_bin,
+        "model_path": model_path,
+        "model_label": spec.hf_filename if spec else model_path.name,
+        "ctx_size": ctx_size,
+        "n_parallel": n_parallel,
+        "allowed_dirs": allowed,
+    })
+    write_config(config_path, text, backup_existing=config_path.exists())
+
+    prompter.info(f"Wrote {config_path}")
+    prompter.info("Start the server with:  uv run llamactl serve")
+    prompter.info('Or run a single task:  uv run llamactl chat "your task"')
+
+    return WizardResult(
+        config_path=config_path,
+        server_bin=server_bin,
+        model_path=model_path,
+        allowed_dirs=allowed,
+        vram_gb=vram,
+        tier=tier,
+    )
