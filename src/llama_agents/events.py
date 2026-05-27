@@ -56,3 +56,18 @@ class PlanAccepted(Event):
 class Done(Event):
     reason: str  # "finished" | "max_iterations" | "cancelled" | "token_budget"
     final_message: str | None = None
+
+
+@dataclass
+class MemoryStored(Event):
+    blob_id: str
+    kind: str
+    scope: str
+    bytes_: int
+
+
+@dataclass
+class MemoryEvicted(Event):
+    blob_id: str
+    turn: int
+    bytes_freed: int
