@@ -75,6 +75,24 @@ def serve(
     uvicorn.run(fastapi_app, host=cfg.http.host, port=cfg.http.port)
 
 
+@app.command()
+def init(
+    force: bool = typer.Option(
+        False, "--force",
+        help="Overwrite existing config.toml without prompting (backs up first).",
+    ),
+) -> None:
+    """Interactive first-run setup: detects llama-server, picks a model, writes config.toml."""
+    from .install import RichPrompter, run_install_wizard
+    result = run_install_wizard(
+        repo_root=Path.cwd(),
+        prompter=RichPrompter(),
+        force=force,
+    )
+    if result is None:
+        raise typer.Exit(code=1)
+
+
 async def _run_chat(config_path: Path, prompt: str, max_iterations: int) -> None:
     cfg = load_config(config_path)
     rt = await Runtime.create(cfg)
