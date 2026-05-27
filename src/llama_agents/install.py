@@ -273,3 +273,69 @@ def write_config(path: Path, content: str, *, backup_existing: bool) -> None:
         backup = path.with_name(f"{path.name}.bak.{int(time.time())}")
         path.replace(backup)
     path.write_text(content, encoding="utf-8")
+
+
+def _toml_str(p: Path) -> str:
+    """Forward-slash a path and wrap it as a TOML basic string."""
+    return '"' + str(p).replace("\\", "/") + '"'
+
+
+def render_config_toml(values: dict) -> str:
+    """Build a config.toml from wizard outputs.
+
+    Required keys in `values`:
+      server_bin (Path), model_path (Path), model_label (str),
+      ctx_size (int), n_parallel (int), allowed_dirs (list[Path]).
+    """
+    allowed = ",".join(_toml_str(p) for p in values["allowed_dirs"])
+    return (
+        "[llama]\n"
+        'server_url = "http://127.0.0.1:8080"\n'
+        f'model = "{values["model_label"]}"\n'
+        "auto_spawn = true\n"
+        "kill_on_exit = true\n"
+        f"server_bin = {_toml_str(values['server_bin'])}\n"
+        f"model_path = {_toml_str(values['model_path'])}\n"
+        "ngl = 999\n"
+        f"ctx_size = {values['ctx_size']}\n"
+        f"n_parallel = {values['n_parallel']}\n"
+        "startup_timeout_seconds = 300\n"
+        "\n"
+        "[agent]\n"
+        "max_iterations = 20\n"
+        "max_concurrent_agents = 5\n"
+        "token_budget_pct = 0.8\n"
+        "\n"
+        "[sandbox]\n"
+        f"allowed_dirs = [{allowed}]\n"
+        'shell_allowlist = ["git"]\n'
+        "\n"
+        "[http]\n"
+        'host = "127.0.0.1"\n'
+        "port = 9000\n"
+        "\n"
+        "[memory]\n"
+        "enabled = true\n"
+        '# root = ".llama_agents/memory"\n'
+        '# embedding_model = "BAAI/bge-small-en-v1.5"\n'
+        "# chunk_size = 1500\n"
+        "# chunk_overlap = 150\n"
+        "# plan_recall_k = 3\n"
+        "# plan_recall_threshold = 0.5\n"
+        "# subagent_inline_threshold_chars = 2000\n"
+        "# subagent_summary_max_tokens = 400\n"
+        "# evict_threshold_pct = 70\n"
+        "# evict_tool_result_min_chars = 4000\n"
+        "# scratch_retention_hours = 24\n"
+        "\n"
+        "[queue]\n"
+        "enabled = false\n"
+        '# root = ".llama_agents/queue"\n'
+        "# poll_interval_seconds = 2.0\n"
+        "# max_concurrent = 1\n"
+        "# max_retries = 2\n"
+        "# retry_backoff_seconds = 5.0\n"
+        "# max_iterations = 20\n"
+        "# drain_timeout_seconds = 30.0\n"
+        '# accepted_extensions = [".md", ".txt"]\n'
+    )

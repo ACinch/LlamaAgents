@@ -335,3 +335,54 @@ def test_write_config_creates_parent_dir(tmp_path: Path):
     cfg = tmp_path / "sub" / "config.toml"
     write_config(cfg, "x", backup_existing=False)
     assert cfg.is_file()
+
+
+import tomllib
+
+from llama_agents.install import render_config_toml
+
+
+def _sample_values(tmp_path: Path) -> dict:
+    return {
+        "server_bin": tmp_path / "llama-server.exe",
+        "model_path": tmp_path / "GGUF" / "model.gguf",
+        "model_label": "model.gguf",
+        "ctx_size": 32768,
+        "n_parallel": 2,
+        "allowed_dirs": [tmp_path / "a", tmp_path / "b"],
+    }
+
+
+def test_render_config_toml_reparses_into_valid_config(tmp_path: Path):
+    from llama_agents.config import Config
+
+    text = render_config_toml(_sample_values(tmp_path))
+    data = tomllib.loads(text)
+    # Must round-trip through pydantic — proves we produced a valid Config.
+    cfg = Config.model_validate(data)
+    assert cfg.llama.ctx_size == 32768
+    assert cfg.llama.n_parallel == 2
+    assert cfg.queue.enabled is False
+    assert cfg.memory.enabled is True
+    assert cfg.llama.auto_spawn is True
+
+
+def test_render_config_toml_includes_chosen_paths(tmp_path: Path):
+    text = render_config_toml(_sample_values(tmp_path))
+    assert str(tmp_path / "llama-server.exe").replace("\\", "/") in text \
+        or str(tmp_path / "llama-server.exe") in text
+    assert "model.gguf" in text
+    assert str(tmp_path / "a").replace("\\", "/") in text \
+        or str(tmp_path / "a") in text
+
+
+def test_render_config_toml_shell_allowlist_is_git_only(tmp_path: Path):
+    text = render_config_toml(_sample_values(tmp_path))
+    data = tomllib.loads(text)
+    assert data["sandbox"]["shell_allowlist"] == ["git"]
+
+
+def test_render_config_toml_marks_queue_disabled(tmp_path: Path):
+    text = render_config_toml(_sample_values(tmp_path))
+    data = tomllib.loads(text)
+    assert data["queue"]["enabled"] is False
