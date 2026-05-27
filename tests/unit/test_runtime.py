@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from llama_agents.config import Config, LlamaConfig, AgentConfig, SandboxConfig
+from llama_agents.config import Config, LlamaConfig, AgentConfig, SandboxConfig, MemoryConfig
 from llama_agents.llama_client import ChatResponse
 from llama_agents.runtime import Runtime
 
@@ -63,3 +63,47 @@ async def test_subagent_does_not_mutate_parent_registry(tmp_path: Path):
     assert "subagent_spawn" in rt.registry.names()
     assert set(rt.registry.names()) == parent_names_before
     await rt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_runtime_registers_memory_recall_when_enabled(tmp_path, monkeypatch):
+    cfg = Config(
+        sandbox=SandboxConfig(allowed_dirs=[tmp_path]),
+        memory=MemoryConfig(root=tmp_path / ".mem"),
+    )
+    # Avoid spawning llama-server
+    monkeypatch.setattr(cfg.llama, "auto_spawn", False)
+
+    class _FakeClient:
+        async def chat(self, **_): raise NotImplementedError
+        async def health(self): return True
+        async def aclose(self): pass
+
+    rt = await Runtime.create(cfg, client_factory=lambda url: _FakeClient())
+    try:
+        assert "memory_recall" in rt.registry.names()
+    finally:
+        await rt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_runtime_uses_inert_store_when_disabled(tmp_path, monkeypatch):
+    from llama_agents.memory.store import InertMemoryStore
+
+    cfg = Config(
+        sandbox=SandboxConfig(allowed_dirs=[tmp_path]),
+        memory=MemoryConfig(enabled=False),
+    )
+    monkeypatch.setattr(cfg.llama, "auto_spawn", False)
+
+    class _FakeClient:
+        async def chat(self, **_): raise NotImplementedError
+        async def health(self): return True
+        async def aclose(self): pass
+
+    rt = await Runtime.create(cfg, client_factory=lambda url: _FakeClient())
+    try:
+        assert isinstance(rt.memory, InertMemoryStore)
+        assert "memory_recall" in rt.registry.names()  # tool registered either way
+    finally:
+        await rt.aclose()
