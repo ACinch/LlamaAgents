@@ -59,7 +59,7 @@ class MemoryConfig(BaseModel):
 class QueueConfig(BaseModel):
     enabled: bool = False
     root: Path = Field(default=Path(".llama_agents/queue"))
-    poll_interval_seconds: float = Field(default=2.0, ge=0.1)
+    poll_interval_seconds: float = Field(default=2.0, ge=0.01)
     max_concurrent: int = Field(default=1, ge=1)
     max_retries: int = Field(default=2, ge=0)
     retry_backoff_seconds: float = Field(default=5.0, ge=0.0)
