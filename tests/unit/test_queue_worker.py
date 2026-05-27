@@ -275,3 +275,55 @@ async def test_max_iterations_counts_as_success(queue_cfg, tmp_path):
         .read_text().splitlines()
     ]
     assert "Done" in types
+
+
+class _SlowClient:
+    """Sleeps for a configurable duration before responding."""
+
+    def __init__(self, delay: float, response: ChatResponse):
+        self._delay = delay
+        self._response = response
+
+    async def chat(self, **_):
+        await asyncio.sleep(self._delay)
+        return self._response
+
+
+@pytest.mark.asyncio
+async def test_concurrency_cap_is_respected(tmp_path):
+    cfg = QueueConfig(
+        enabled=True, root=tmp_path,
+        poll_interval_seconds=0.02, max_concurrent=2,
+        max_retries=0, retry_backoff_seconds=0.0,
+        max_iterations=5, drain_timeout_seconds=5.0,
+    )
+    ensure_dirs(cfg.root)
+    for name in ("a.md", "b.md", "c.md"):
+        (tmp_path / "inbox" / name).write_text("go")
+
+    rt = _StubRuntime(lambda: _SlowClient(0.3, ChatResponse(content="ok")))
+    worker = JobQueueWorker(rt, cfg)
+    task = asyncio.create_task(worker.run())
+
+    observed: list[int] = []
+    try:
+        # Sample the in-flight set size while jobs are running.
+        for _ in range(20):
+            observed.append(len(worker._in_flight))  # noqa: SLF001
+            await asyncio.sleep(0.05)
+        ok = await _wait_until(
+            lambda: all((tmp_path / "done" / n).exists() for n in ("a.md", "b.md", "c.md")),
+            timeout=5.0,
+        )
+        assert ok
+    finally:
+        await worker.drain(timeout=2.0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert max(observed) <= 2, f"saw in-flight={max(observed)} (cap=2)"
+    # At least one sample should have hit the cap.
+    assert max(observed) >= 2
