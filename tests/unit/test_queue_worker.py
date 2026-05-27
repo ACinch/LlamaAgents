@@ -148,3 +148,92 @@ async def test_non_infra_error_lands_in_failed(queue_cfg, tmp_path):
     assert "LlamaProtocolError" in err_text
     assert "bad shape" in err_text
     assert (tmp_path / "failed" / "boom.events.jsonl").exists()
+
+
+class _FlakyClient:
+    """Fails N times with the given exception, then returns the response."""
+
+    def __init__(self, exc: Exception, fail_times: int, success_response):
+        self._exc = exc
+        self._fail_times = fail_times
+        self._response = success_response
+        self.calls = 0
+
+    async def chat(self, **_):
+        self.calls += 1
+        if self.calls <= self._fail_times:
+            raise self._exc
+        return self._response
+
+
+@pytest.mark.asyncio
+async def test_infra_error_retries_then_succeeds(tmp_path):
+    from llama_agents.errors import LlamaUnreachable
+
+    cfg = QueueConfig(
+        enabled=True, root=tmp_path,
+        poll_interval_seconds=0.05, max_concurrent=1,
+        max_retries=2, retry_backoff_seconds=0.0,
+        max_iterations=5, drain_timeout_seconds=2.0,
+    )
+    ensure_dirs(cfg.root)
+    (tmp_path / "inbox" / "retry.md").write_text("go")
+
+    # Share a single client across new_agent() calls so .calls accumulates.
+    flaky = _FlakyClient(
+        LlamaUnreachable("conn refused"),
+        fail_times=1,
+        success_response=ChatResponse(content="finally"),
+    )
+    rt = _StubRuntime(lambda: flaky)
+    worker = JobQueueWorker(rt, cfg)
+    task = asyncio.create_task(worker.run())
+    try:
+        ok = await _wait_until(
+            lambda: (tmp_path / "done" / "retry.md").exists(), timeout=3.0
+        )
+        assert ok
+    finally:
+        await worker.drain(timeout=1.0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert (tmp_path / "done" / "retry.md").read_text() == "finally"
+    assert flaky.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_infra_error_terminates_after_max_retries(tmp_path):
+    from llama_agents.errors import LlamaUnreachable
+
+    cfg = QueueConfig(
+        enabled=True, root=tmp_path,
+        poll_interval_seconds=0.05, max_concurrent=1,
+        max_retries=1, retry_backoff_seconds=0.0,
+        max_iterations=5, drain_timeout_seconds=2.0,
+    )
+    ensure_dirs(cfg.root)
+    (tmp_path / "inbox" / "dead.md").write_text("go")
+
+    rt = _StubRuntime(lambda: _ErroringClient(LlamaUnreachable("nope")))
+    worker = JobQueueWorker(rt, cfg)
+    task = asyncio.create_task(worker.run())
+    try:
+        ok = await _wait_until(
+            lambda: (tmp_path / "failed" / "dead.md").exists(), timeout=3.0
+        )
+        assert ok
+    finally:
+        await worker.drain(timeout=1.0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    err = (tmp_path / "failed" / "dead.error.txt").read_text()
+    assert "attempts: 2" in err  # initial + 1 retry
+    assert "LlamaUnreachable" in err

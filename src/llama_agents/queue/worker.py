@@ -102,9 +102,37 @@ class JobQueueWorker:
         return None
 
     async def _run_job(self, path: Path) -> None:
-        logger.info("queue: running %s", path.name)
-        result = await self._invoke_agent(path)
-        await self._finalize(path, result, attempt=0)
+        attempt = 0
+        while True:
+            logger.info("queue: running %s (attempt %d)", path.name, attempt + 1)
+            result = await self._invoke_agent(path)
+            if self._should_retry(result, attempt):
+                delay = self._cfg.retry_backoff_seconds * (2 ** attempt)
+                logger.info(
+                    "queue: %s infra error %s — retrying in %.1fs",
+                    path.name,
+                    result.loop_error.error_type if result.loop_error else "?",
+                    delay,
+                )
+                if delay > 0:
+                    try:
+                        await asyncio.wait_for(self._stop.wait(), timeout=delay)
+                    except asyncio.TimeoutError:
+                        pass
+                    if self._stop.is_set():
+                        # Shutting down — leave file in processing/ for sweep.
+                        return
+                attempt += 1
+                continue
+            await self._finalize(path, result, attempt=attempt)
+            return
+
+    def _should_retry(self, result: JobResult, attempt: int) -> bool:
+        if result.success or result.loop_error is None:
+            return False
+        if attempt >= self._cfg.max_retries:
+            return False
+        return result.loop_error.error_type in INFRA_ERROR_TYPES
 
     async def _invoke_agent(self, path: Path) -> JobResult:
         prompt = path.read_text(encoding="utf-8")
