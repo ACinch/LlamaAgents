@@ -156,9 +156,10 @@ For job `foo.md`:
 2. The terminating event is a `LoopError` (not just `Done` with
    `reason="max_iterations"`).
 3. `loop_error.error_type` is in the infrastructure allowlist:
-   `{"LlamaServerError", "HTTPError", "ConnectionError",
-   "ServerTimeoutError"}`. (Exact names match the exception classes
-   in `errors.py` and `llama_client.py`.)
+   `{"LlamaUnreachable"}` (the sole subclass of `LlamaAgentsError`
+   that wraps transient HTTP/connect failures; see `errors.py` and
+   `llama_client.py`). Other LoopErrors — e.g. `LlamaProtocolError`
+   for unexpected response shape — are deterministic and not retried.
 4. `attempt < cfg.queue.max_retries`.
 
 Otherwise returns `"fail"`. Retries wait
@@ -247,7 +248,7 @@ so a reader can reconstruct what was offloaded.
 1. **Happy path:** drop a file in inbox → after one tick it appears in
    `processing/` → after the run completes it lands in `done/` with the
    two output files. `events.jsonl` contains a `Done` event.
-2. **Infra retry:** scripted client raises `LlamaServerError` on
+2. **Infra retry:** scripted client raises `LlamaUnreachable` on
    attempt 1, succeeds on attempt 2. File stays in `processing/`
    between attempts; final landing is `done/`.
 3. **Terminal fail:** scripted client raises a non-infra error. File
