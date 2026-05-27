@@ -64,3 +64,29 @@ def test_load_config_normalizes_allowed_dirs(tmp_path: Path):
     cfg = load_config(p)
     # Paths are absolute and use forward slashes internally on all platforms.
     assert all(d.is_absolute() for d in cfg.sandbox.allowed_dirs)
+
+
+def test_memory_config_defaults():
+    from llama_agents.config import Config
+
+    cfg = Config.model_validate({})
+    assert cfg.memory.enabled is True
+    assert cfg.memory.root == "_llama_agents/memory" or cfg.memory.root == ".llama_agents/memory"
+    assert cfg.memory.embedding_model == "BAAI/bge-small-en-v1.5"
+    assert cfg.memory.chunk_size == 1500
+    assert cfg.memory.chunk_overlap == 150
+    assert cfg.memory.plan_recall_k == 3
+    assert 0.0 <= cfg.memory.plan_recall_threshold <= 1.0
+    assert cfg.memory.subagent_inline_threshold_chars == 2000
+    assert cfg.memory.evict_threshold_pct == 70
+    assert cfg.memory.evict_tool_result_min_chars == 4000
+    assert cfg.memory.scratch_retention_hours == 24
+
+
+def test_memory_config_disabled_toml(tmp_path):
+    from llama_agents.config import load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text("[memory]\nenabled = false\n")
+    cfg = load_config(p)
+    assert cfg.memory.enabled is False

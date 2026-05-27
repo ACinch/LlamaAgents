@@ -41,6 +41,21 @@ class HttpConfig(BaseModel):
     port: int = 9000
 
 
+class MemoryConfig(BaseModel):
+    enabled: bool = True
+    root: str = ".llama_agents/memory"
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    chunk_size: int = Field(default=1500, ge=200)
+    chunk_overlap: int = Field(default=150, ge=0)
+    plan_recall_k: int = Field(default=3, ge=0)
+    plan_recall_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    subagent_inline_threshold_chars: int = Field(default=2000, ge=0)
+    subagent_summary_max_tokens: int = Field(default=400, ge=64)
+    evict_threshold_pct: int = Field(default=70, ge=10, le=99)
+    evict_tool_result_min_chars: int = Field(default=4000, ge=200)
+    scratch_retention_hours: int = Field(default=24, ge=-1)
+
+
 class McpServerConfig(BaseModel):
     name: str
     command: str
@@ -53,6 +68,7 @@ class Config(BaseModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     http: HttpConfig = Field(default_factory=HttpConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
 
 
