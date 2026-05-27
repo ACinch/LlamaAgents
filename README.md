@@ -82,6 +82,20 @@ matching runnable scripts in [`examples/`](examples/):
 3. **Marketing suggestions from RAG** — grounds copy in actual RAG
    index content, refuses to invent unsupported claims.
 
+## Memory
+
+llama-agents has a built-in local RAG-backed memory system:
+
+- accepted plans are stored across runs and the planner/reviewer get top-k
+  similar past plans injected into their prompts;
+- large subagent outputs are written to memory and returned as a summary +
+  handle, keeping the orchestrator's context tight;
+- old tool results are evicted to memory when the context window fills.
+
+Storage lives at `.llama_agents/memory/` (SQLite + per-run markdown files).
+Embeddings use `fastembed` (BAAI/bge-small-en-v1.5, ONNX). See
+[docs/memory.md](docs/memory.md) for details.
+
 ## Tools out of the box
 
 | Tool | Description |

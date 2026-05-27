@@ -11,3 +11,4 @@ htmlcov/
 .env
 .mcp.json
 docs/examples/_*.md
+.llama_agents/memory/

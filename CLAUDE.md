@@ -242,10 +242,10 @@ and then subagents fan out per domain.
   spawn more subagents (their registry has `subagent_spawn` removed),
   but if a tool indirectly triggers re-entry into the spawn semaphore,
   there's no depth tracking. Flagged in the security review.
-- **No RAG memory.** A planned extension is to store accepted plans in
-  RAG and retrieve similar prior plans during the planning phase, plus
-  use RAG as overflow scratch when message history grows large
-  (pseudo-compaction). Not implemented yet.
+- **RAG memory:** implemented in phase 2 — accepted plans persist
+  across runs; large subagent outputs and overflow tool results are
+  offloaded to a local SQLite + fastembed store; `memory_recall` retrieves
+  them. See `docs/memory.md`.
 - **Reviewer can confirm bad plans.** Self-review by the same model is
   cheap but prone to confirmation bias. A reviewer-subagent variant is
   on the table.
