@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from contextlib import asynccontextmanager
 from typing import Any, Callable
@@ -12,6 +13,7 @@ from sse_starlette.sse import EventSourceResponse
 from .agent import AgentRunOptions
 from .config import Config
 from .events import AssistantChunk, Done, LoopError, MemoryEvicted, MemoryStored, ToolCallResult, ToolCallStart
+from .queue.worker import JobQueueWorker
 from .runtime import Runtime
 
 
@@ -27,14 +29,31 @@ def create_app(
     client_factory: Callable | None = None,
 ) -> FastAPI:
     runtime_box: dict[str, Runtime] = {}
+    worker_box: dict[str, JobQueueWorker | None] = {"worker": None}
+    worker_task_box: dict[str, asyncio.Task | None] = {"task": None}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        runtime_box["rt"] = await Runtime.create(cfg, client_factory=client_factory)
+        rt = await Runtime.create(cfg, client_factory=client_factory)
+        runtime_box["rt"] = rt
+        if cfg.queue.enabled:
+            worker = JobQueueWorker(rt, cfg.queue)
+            worker_box["worker"] = worker
+            worker_task_box["task"] = asyncio.create_task(worker.run())
         try:
             yield
         finally:
-            await runtime_box["rt"].aclose()
+            worker = worker_box["worker"]
+            task = worker_task_box["task"]
+            if worker is not None:
+                await worker.drain(timeout=cfg.queue.drain_timeout_seconds)
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            await rt.aclose()
 
     app = FastAPI(lifespan=lifespan)
     app.add_middleware(
