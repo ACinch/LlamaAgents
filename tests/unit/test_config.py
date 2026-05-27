@@ -71,7 +71,7 @@ def test_memory_config_defaults():
 
     cfg = Config.model_validate({})
     assert cfg.memory.enabled is True
-    assert cfg.memory.root == ".llama_agents/memory"
+    assert cfg.memory.root == Path(".llama_agents/memory")
     assert cfg.memory.embedding_model == "BAAI/bge-small-en-v1.5"
     assert cfg.memory.chunk_size == 1500
     assert cfg.memory.chunk_overlap == 150

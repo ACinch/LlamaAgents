@@ -43,7 +43,7 @@ class HttpConfig(BaseModel):
 
 class MemoryConfig(BaseModel):
     enabled: bool = True
-    root: str = ".llama_agents/memory"
+    root: Path = Field(default=Path(".llama_agents/memory"))
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     chunk_size: int = Field(default=1500, ge=200)
     chunk_overlap: int = Field(default=150, ge=0)
