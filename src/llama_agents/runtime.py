@@ -112,7 +112,15 @@ class Runtime:
 
         # Inject the spawn tool last (it needs the runtime to make new agents).
         registry.register(
-            SpawnSubagentTool(agent_factory=rt.new_agent, semaphore=sem)
+            SpawnSubagentTool(
+                agent_factory=rt.new_agent,
+                semaphore=sem,
+                memory=rt.memory,
+                client_for_summary=rt.client,
+                inline_threshold_chars=cfg.memory.subagent_inline_threshold_chars,
+                summary_max_tokens=cfg.memory.subagent_summary_max_tokens,
+                parent_run_id_getter=lambda: rt._current_run_id,
+            )
         )
         return rt
 
