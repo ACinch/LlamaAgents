@@ -89,6 +89,8 @@ shipping — see the table in `README.md`.
 | `runtime.py` | Factory: builds client, registry, bridge, agent factory. |
 | `cli.py` | `llamactl chat` / `llamactl serve`. |
 | `http_app.py` | FastAPI + SSE chat endpoint. |
+| `queue/paths.py` | Atomic move + sweep helpers for queue folders. |
+| `queue/worker.py` | `JobQueueWorker`: polls inbox/, runs jobs, writes outputs. |
 
 ### Agent.run() shape
 
@@ -249,6 +251,9 @@ and then subagents fan out per domain.
 - **Reviewer can confirm bad plans.** Self-review by the same model is
   cheap but prone to confirmation bias. A reviewer-subagent variant is
   on the table.
+- **Queue worker has no priority / cron / control API.** Re-queuing is
+  a manual file move; status is "look at the folders". A future
+  `/queue/*` HTTP surface can be built later if needed.
 
 ## When you're editing this codebase
 
