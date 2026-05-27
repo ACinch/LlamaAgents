@@ -85,3 +85,29 @@ async def test_happy_path_moves_inbox_to_done_with_outputs(queue_cfg, tmp_path):
     assert "Done" in types
     assert not (tmp_path / "inbox" / "foo.md").exists()
     assert not (tmp_path / "processing" / "foo.md").exists()
+
+
+@pytest.mark.asyncio
+async def test_ignored_extensions_are_skipped(queue_cfg, tmp_path):
+    ensure_dirs(queue_cfg.root)
+    (tmp_path / "inbox" / "skip.tmp").write_text("ignore me")
+    (tmp_path / "inbox" / "take.md").write_text("do it")
+
+    rt = _StubRuntime(lambda: _ScriptedClient(ChatResponse(content="ok")))
+    worker = JobQueueWorker(rt, queue_cfg)
+    task = asyncio.create_task(worker.run())
+    try:
+        ok = await _wait_until(lambda: (tmp_path / "done" / "take.md").exists())
+        assert ok
+    finally:
+        await worker.drain(timeout=1.0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    # The .tmp file is still in inbox, untouched.
+    assert (tmp_path / "inbox" / "skip.tmp").exists()
+    assert not (tmp_path / "processing" / "skip.tmp").exists()
+    assert not (tmp_path / "done" / "skip.tmp").exists()
