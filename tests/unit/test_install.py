@@ -441,3 +441,39 @@ def test_download_llama_cpp_raises_on_sha_mismatch(tmp_path: Path, monkeypatch):
     )
     with pytest.raises(RuntimeError, match="sha256 mismatch"):
         download_llama_cpp(tmp_path)
+
+
+import sys
+import types
+
+from llama_agents.install import download_model
+
+
+def test_download_model_calls_hf_hub_download(tmp_path: Path, monkeypatch):
+    captured = {}
+
+    def fake_hf_download(*, repo_id, filename, local_dir, **kwargs):
+        captured["repo_id"] = repo_id
+        captured["filename"] = filename
+        captured["local_dir"] = local_dir
+        out = Path(local_dir) / filename
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"\0")
+        return str(out)
+
+    fake_module = types.ModuleType("huggingface_hub")
+    fake_module.hf_hub_download = fake_hf_download
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_module)
+
+    spec = CATALOGUE[0]
+    result = download_model(spec, tmp_path / "GGUF")
+    assert result == tmp_path / "GGUF" / spec.hf_filename
+    assert captured["repo_id"] == spec.hf_repo
+    assert captured["filename"] == spec.hf_filename
+
+
+def test_download_model_raises_clear_error_when_module_missing(tmp_path: Path, monkeypatch):
+    # Force the import to fail.
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+    with pytest.raises(RuntimeError, match="huggingface_hub is not installed"):
+        download_model(CATALOGUE[0], tmp_path / "GGUF")

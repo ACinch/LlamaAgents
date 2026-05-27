@@ -376,3 +376,29 @@ def download_llama_cpp(dest_dir: Path) -> Path:
             f"downloaded zip did not contain llama-server.exe at {server}"
         )
     return server
+
+
+def download_model(spec: ModelSpec, dest_dir: Path) -> Path:
+    """Download the given GGUF into dest_dir using huggingface_hub.
+
+    Lazy-imports the library so the install module loads cleanly even
+    when the optional extra is not installed.
+    """
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError as e:
+        raise RuntimeError(
+            "huggingface_hub is not installed. Run:\n"
+            "  uv add huggingface_hub\n"
+            f"Then re-run `llamactl init`. (Or download manually from\n"
+            f"  https://huggingface.co/{spec.hf_repo}/blob/main/{spec.hf_filename}\n"
+            f"and put it at {dest_dir / spec.hf_filename}.)"
+        ) from e
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    path_str = hf_hub_download(
+        repo_id=spec.hf_repo,
+        filename=spec.hf_filename,
+        local_dir=str(dest_dir),
+    )
+    return Path(path_str)
