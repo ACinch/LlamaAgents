@@ -158,6 +158,7 @@ def tier_defaults(tier: str) -> tuple[int, int]:
 
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 
@@ -237,3 +238,38 @@ def collect_allowed_dirs(repo_root: Path, prompter: Prompter) -> list[Path]:
             prompter.info(f"{resolved} already in list; skipping.")
             continue
         result.append(resolved)
+
+
+ExistingAction = Literal["write", "cancel"]
+
+
+def existing_config_action(
+    path: Path, prompter: Prompter, *, force: bool
+) -> ExistingAction:
+    """Decide what to do with an existing config file.
+
+    Returns "write" if we should overwrite (missing, forced, or user confirmed).
+    Returns "cancel" if user declined to overwrite.
+    """
+    if not path.exists():
+        return "write"
+    if force:
+        return "write"
+    overwrite = prompter.confirm(
+        f"{path.name} already exists. Overwrite (existing will be backed up)?",
+        default=False,
+    )
+    return "write" if overwrite else "cancel"
+
+
+def write_config(path: Path, content: str, *, backup_existing: bool) -> None:
+    """Write config file, optionally backing up an existing one.
+
+    Creates parent directories if needed. If backup_existing is True and the
+    file exists, the old file is moved to config.toml.bak.{timestamp}.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if backup_existing and path.exists():
+        backup = path.with_name(f"{path.name}.bak.{int(time.time())}")
+        path.replace(backup)
+    path.write_text(content, encoding="utf-8")

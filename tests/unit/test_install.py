@@ -284,3 +284,54 @@ def test_collect_allowed_dirs_rejects_files_and_reprompts(tmp_path: Path):
     dirs = collect_allowed_dirs(repo, p)
     assert dirs == [repo.resolve(), real.resolve()]
     assert any("not a directory" in m[1] for m in p.messages)
+
+
+from llama_agents.install import existing_config_action, write_config
+
+
+def test_existing_config_action_absent_returns_write(tmp_path: Path):
+    p = RecordedPrompter(answers=[])
+    assert existing_config_action(tmp_path / "missing.toml", p, force=False) == "write"
+
+
+def test_existing_config_action_force_returns_write(tmp_path: Path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("old", encoding="utf-8")
+    p = RecordedPrompter(answers=[])
+    assert existing_config_action(cfg, p, force=True) == "write"
+
+
+def test_existing_config_action_prompts_and_writes_on_yes(tmp_path: Path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("old", encoding="utf-8")
+    p = RecordedPrompter(answers=["y"])
+    assert existing_config_action(cfg, p, force=False) == "write"
+
+
+def test_existing_config_action_cancels_on_no(tmp_path: Path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("old", encoding="utf-8")
+    p = RecordedPrompter(answers=["n"])
+    assert existing_config_action(cfg, p, force=False) == "cancel"
+
+
+def test_write_config_writes_when_absent(tmp_path: Path):
+    cfg = tmp_path / "config.toml"
+    write_config(cfg, "[llama]\n", backup_existing=False)
+    assert cfg.read_text(encoding="utf-8") == "[llama]\n"
+
+
+def test_write_config_backs_up_existing(tmp_path: Path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("OLD", encoding="utf-8")
+    write_config(cfg, "NEW", backup_existing=True)
+    assert cfg.read_text(encoding="utf-8") == "NEW"
+    backups = list(tmp_path.glob("config.toml.bak.*"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == "OLD"
+
+
+def test_write_config_creates_parent_dir(tmp_path: Path):
+    cfg = tmp_path / "sub" / "config.toml"
+    write_config(cfg, "x", backup_existing=False)
+    assert cfg.is_file()
