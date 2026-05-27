@@ -47,3 +47,35 @@ def test_recorded_prompter_raises_when_out_of_answers():
     p = RecordedPrompter(answers=[])
     with pytest.raises(RuntimeError, match="ran out of scripted answers"):
         p.ask("name?")
+
+
+from llama_agents.install import CATALOGUE, ModelSpec, recommend_tier, tier_defaults
+
+
+def test_catalogue_has_three_tiers():
+    tiers = {m.tier for m in CATALOGUE}
+    assert tiers == {"L", "M", "S"}
+
+
+def test_catalogue_filenames_unique():
+    names = [m.hf_filename for m in CATALOGUE]
+    assert len(names) == len(set(names))
+
+
+def test_recommend_tier_thresholds():
+    assert recommend_tier(None) == "unknown"
+    assert recommend_tier(0.0) == "unknown"
+    assert recommend_tier(7.99) == "unknown"
+    assert recommend_tier(8.0) == "S"
+    assert recommend_tier(13.99) == "S"
+    assert recommend_tier(14.0) == "M"
+    assert recommend_tier(23.99) == "M"
+    assert recommend_tier(24.0) == "L"
+    assert recommend_tier(48.0) == "L"
+
+
+def test_tier_defaults_match_spec():
+    assert tier_defaults("L") == (65536, 2)
+    assert tier_defaults("M") == (32768, 2)
+    assert tier_defaults("S") == (8192, 1)
+    assert tier_defaults("unknown") == (8192, 1)

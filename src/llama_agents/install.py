@@ -92,3 +92,65 @@ class RichPrompter:
     def warn(self, message: str) -> None:
         from rich.console import Console
         Console().print(f"[yellow]{message}[/yellow]")
+
+
+from dataclasses import dataclass
+from typing import Literal
+
+Tier = Literal["L", "M", "S", "unknown"]
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    tier: Literal["L", "M", "S"]
+    label: str
+    hf_repo: str
+    hf_filename: str
+    size_gb: float
+
+
+CATALOGUE: list[ModelSpec] = [
+    ModelSpec(
+        tier="L",
+        label="Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL",
+        hf_repo="unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF",
+        hf_filename="Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf",
+        size_gb=17.6,
+    ),
+    ModelSpec(
+        tier="M",
+        label="DeepSeek-R1-Distill-Qwen-14B-Q6_K_L",
+        hf_repo="bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF",
+        hf_filename="DeepSeek-R1-Distill-Qwen-14B-Q6_K_L.gguf",
+        size_gb=12.0,
+    ),
+    ModelSpec(
+        tier="S",
+        label="Llama-3.2-3B-Instruct-Q5_K_M",
+        hf_repo="bartowski/Llama-3.2-3B-Instruct-GGUF",
+        hf_filename="Llama-3.2-3B-Instruct-Q5_K_M.gguf",
+        size_gb=2.4,
+    ),
+]
+
+
+def recommend_tier(vram_gb: float | None) -> Tier:
+    if vram_gb is None:
+        return "unknown"
+    if vram_gb >= 24.0:
+        return "L"
+    if vram_gb >= 14.0:
+        return "M"
+    if vram_gb >= 8.0:
+        return "S"
+    return "unknown"
+
+
+def tier_defaults(tier: str) -> tuple[int, int]:
+    """(ctx_size, n_parallel) tuned to each VRAM tier."""
+    return {
+        "L": (65536, 2),
+        "M": (32768, 2),
+        "S": (8192, 1),
+        "unknown": (8192, 1),
+    }[tier]
