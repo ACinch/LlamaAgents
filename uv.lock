@@ -538,6 +538,9 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-mock" },
 ]
+install = [
+    { name = "huggingface-hub" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -550,6 +553,7 @@ requires-dist = [
     { name = "fastembed", specifier = ">=0.4" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "httpx", extras = ["http2"], marker = "extra == 'dev'" },
+    { name = "huggingface-hub", marker = "extra == 'install'", specifier = ">=0.24" },
     { name = "mcp", specifier = ">=1.0" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pydantic", specifier = ">=2.6" },
@@ -561,7 +565,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", specifier = ">=0.29" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["install", "dev"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "asgi-lifespan", specifier = ">=2.1.0" }]
