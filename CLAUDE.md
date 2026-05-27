@@ -91,6 +91,7 @@ shipping — see the table in `README.md`.
 | `http_app.py` | FastAPI + SSE chat endpoint. |
 | `queue/paths.py` | Atomic move + sweep helpers for queue folders. |
 | `queue/worker.py` | `JobQueueWorker`: polls inbox/, runs jobs, writes outputs. |
+| `install.py` | `llamactl init` wizard: VRAM detect, model pick, config render. |
 
 ### Agent.run() shape
 

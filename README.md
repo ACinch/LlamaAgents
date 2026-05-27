@@ -28,6 +28,18 @@ tools — driven through a CLI or an HTTP/SSE service.
 
 ## Quickstart
 
+## First-time setup
+
+After installing dependencies, run:
+
+```
+uv run llamactl init
+```
+
+This interactive wizard detects your llama-server binary, recommends
+a GGUF model sized to your GPU, downloads it if needed, and writes a
+`config.toml`. See `docs/install.md` for details.
+
 ```powershell
 # install (uv lives at %USERPROFILE%\AppData\Roaming\Python\Python314\Scripts\uv.exe on Windows)
 uv sync --extra dev
