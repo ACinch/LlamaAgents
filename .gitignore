@@ -10,3 +10,4 @@ build/
 htmlcov/
 .env
 .mcp.json
+docs/examples/_*.md
