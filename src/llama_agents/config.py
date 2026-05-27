@@ -56,6 +56,20 @@ class MemoryConfig(BaseModel):
     scratch_retention_hours: int = Field(default=24, ge=-1)
 
 
+class QueueConfig(BaseModel):
+    enabled: bool = False
+    root: Path = Field(default=Path(".llama_agents/queue"))
+    poll_interval_seconds: float = Field(default=2.0, ge=0.1)
+    max_concurrent: int = Field(default=1, ge=1)
+    max_retries: int = Field(default=2, ge=0)
+    retry_backoff_seconds: float = Field(default=5.0, ge=0.0)
+    max_iterations: int = Field(default=20, ge=1)
+    drain_timeout_seconds: float = Field(default=30.0, ge=0.0)
+    accepted_extensions: list[str] = Field(
+        default_factory=lambda: [".md", ".txt"]
+    )
+
+
 class McpServerConfig(BaseModel):
     name: str
     command: str
@@ -69,6 +83,7 @@ class Config(BaseModel):
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     http: HttpConfig = Field(default_factory=HttpConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    queue: QueueConfig = Field(default_factory=QueueConfig)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
 
 

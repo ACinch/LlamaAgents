@@ -91,3 +91,36 @@ def test_memory_config_disabled_toml(tmp_path):
     p.write_text("[memory]\nenabled = false\n")
     cfg = load_config(p)
     assert cfg.memory.enabled is False
+
+
+def test_queue_config_defaults():
+    from llama_agents.config import Config
+
+    cfg = Config.model_validate({})
+    assert cfg.queue.enabled is False
+    assert str(cfg.queue.root) in (
+        ".llama_agents/queue", ".llama_agents\\queue"
+    )
+    assert cfg.queue.poll_interval_seconds == 2.0
+    assert cfg.queue.max_concurrent == 1
+    assert cfg.queue.max_retries == 2
+    assert cfg.queue.retry_backoff_seconds == 5.0
+    assert cfg.queue.max_iterations == 20
+    assert cfg.queue.drain_timeout_seconds == 30.0
+    assert cfg.queue.accepted_extensions == [".md", ".txt"]
+
+
+def test_queue_config_from_toml(tmp_path):
+    from llama_agents.config import load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text(
+        "[queue]\n"
+        "enabled = true\n"
+        "max_concurrent = 3\n"
+        "accepted_extensions = [\".md\"]\n"
+    )
+    cfg = load_config(p)
+    assert cfg.queue.enabled is True
+    assert cfg.queue.max_concurrent == 3
+    assert cfg.queue.accepted_extensions == [".md"]
