@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from typing import Protocol
 
 
@@ -448,19 +449,22 @@ def _resolve_server_bin(repo_root: Path, prompter: Prompter) -> Path | None:
         ):
             return found
     # Not found or user declined: offer alternatives.
-    options = [
-        "Download a pinned llama.cpp Windows CUDA release (~250 MB)",
+    options = []
+    if sys.platform == "win32":
+        options.append("Download a pinned llama.cpp Windows CUDA release (~250 MB)")
+    options.extend([
         "Enter a path manually",
         "Cancel and install it yourself",
-    ]
+    ])
     idx = prompter.choose("How would you like to proceed?", options, default_index=0)
-    if idx == 0:
+    choice = options[idx]
+    if choice.startswith("Download"):
         try:
             return download_llama_cpp(repo_root / "llamacpp-bin")
         except Exception as e:
             prompter.warn(f"download failed: {e}")
             return None
-    if idx == 1:
+    if choice.startswith("Enter"):
         raw = prompter.ask("Path to llama-server.exe", default="")
         p = Path(raw)
         if not p.is_file():
@@ -538,8 +542,14 @@ def run_install_wizard(
     ):
         raw_ctx = prompter.ask("ctx_size", default=str(ctx_size))
         raw_np = prompter.ask("n_parallel", default=str(n_parallel))
-        ctx_size = int(raw_ctx)
-        n_parallel = int(raw_np)
+        try:
+            ctx_size = int(raw_ctx)
+        except ValueError:
+            prompter.warn(f"'{raw_ctx}' is not an integer; using {ctx_size}.")
+        try:
+            n_parallel = int(raw_np)
+        except ValueError:
+            prompter.warn(f"'{raw_np}' is not an integer; using {n_parallel}.")
 
     text = render_config_toml({
         "server_bin": server_bin,

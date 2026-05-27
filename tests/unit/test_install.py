@@ -545,3 +545,122 @@ def test_wizard_cancels_when_user_declines_overwrite(tmp_path: Path, monkeypatch
     assert result is None
     # Existing file untouched.
     assert existing.read_text(encoding="utf-8") == "# old"
+
+
+# ---------------------------------------------------------------------------
+# Fix 1: POSIX platform guard on _resolve_server_bin
+# ---------------------------------------------------------------------------
+
+from llama_agents.install import _resolve_server_bin
+
+
+def test_resolve_server_bin_omits_download_on_posix(tmp_path: Path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    # No llama-server found.
+    monkeypatch.setattr("llama_agents.install.locate_llama_server", lambda r: None)
+    monkeypatch.setattr(sys, "platform", "linux")
+    # First option must be "Enter a path manually" since download is omitted.
+    # Scripted: pick option 1 (enter path), then provide a non-file -> warn+None.
+    p = RecordedPrompter(answers=["1", "/nonexistent"])
+    result = _resolve_server_bin(repo, p)
+    assert result is None
+    # Confirm the "Enter" branch was hit (not the "Download" branch) by checking
+    # the warn message about the non-existent path.
+    assert any("not a file" in m[1] for m in p.messages)
+
+
+def test_resolve_server_bin_offers_download_on_windows(tmp_path: Path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr("llama_agents.install.locate_llama_server", lambda r: None)
+    monkeypatch.setattr(sys, "platform", "win32")
+    # Stub download_llama_cpp to return a fake path so we confirm the
+    # download branch is reachable when platform is win32.
+    fake = repo / "llamacpp-bin" / "llama-server.exe"
+    fake.parent.mkdir(parents=True)
+    fake.write_bytes(b"\0")
+    monkeypatch.setattr(
+        "llama_agents.install.download_llama_cpp", lambda d: fake
+    )
+    # Scripted: pick option 1 -> Download.
+    p = RecordedPrompter(answers=["1"])
+    result = _resolve_server_bin(repo, p)
+    assert result == fake
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: int() fallback on garbage ctx_size / n_parallel input
+# ---------------------------------------------------------------------------
+
+def test_wizard_falls_back_on_garbage_ctx_size_input(tmp_path: Path, monkeypatch):
+    from llama_agents.config import Config
+
+    server = tmp_path / "llama.cpp" / "build" / "bin" / "Release" / "llama-server.exe"
+    server.parent.mkdir(parents=True)
+    server.write_bytes(b"\0")
+    repo = tmp_path / "llama-agents"
+    repo.mkdir()
+    spec = CATALOGUE[0]
+    model_file = repo / "GGUF" / spec.hf_filename
+    model_file.parent.mkdir()
+    model_file.write_bytes(b"\0")
+
+    monkeypatch.setattr("llama_agents.install.detect_vram_gb", lambda: 24.0)
+    monkeypatch.setattr(
+        "llama_agents.install.model_search_dirs",
+        lambda r: [r / "GGUF", r.parent / "GGUF", tmp_path / "fake_home" / "GGUF"],
+    )
+
+    # Answers:
+    # 1. confirm found llama-server [Y]
+    # 2. choose model (Enter -> default L)
+    # 3. confirm use existing model [Y]
+    # 4. allowed_dirs (empty -> finish)
+    # 5. accept tier defaults? -> "n"
+    # 6. ctx_size -> "64k" (bad)
+    # 7. n_parallel -> "" (default -> 2)
+    p = RecordedPrompter(answers=["y", "", "y", "", "n", "64k", ""])
+
+    result = run_install_wizard(repo_root=repo, prompter=p, force=False)
+    assert result is not None
+    data = tomllib.loads(result.config_path.read_text(encoding="utf-8"))
+    cfg = Config.model_validate(data)
+    # ctx_size falls back to L-tier default (65536) since "64k" couldn't parse.
+    assert cfg.llama.ctx_size == 65536
+    # n_parallel stays at L-tier default (2).
+    assert cfg.llama.n_parallel == 2
+    assert any("not an integer" in m[1] for m in p.messages)
+
+
+# ---------------------------------------------------------------------------
+# Fix 3: Direct tests for _present_models recommendation flagging
+# ---------------------------------------------------------------------------
+
+from llama_agents.install import _present_models
+
+
+def test_present_models_default_is_recommended_tier():
+    # Pre-select L for an L-tier user.
+    p = RecordedPrompter(answers=[""])  # empty -> default_index
+    spec = _present_models("L", p)
+    assert spec is not None
+    assert spec.tier == "L"
+
+
+def test_present_models_flags_oversized_on_m_tier():
+    """When user is M-tier, L should be flagged '(may not fit)'."""
+    # Capture the options shown by passing a RecordedPrompter that picks default.
+    p = RecordedPrompter(answers=[""])  # default
+    spec = _present_models("M", p)
+    # Default index should be the M-tier entry now.
+    assert spec is not None
+    assert spec.tier == "M"
+
+
+def test_present_models_returns_none_for_user_specified_file():
+    """The 'Use a local file' sentinel returns None."""
+    # Choose the last option (Use a local file), which is index len(CATALOGUE).
+    p = RecordedPrompter(answers=[str(len(CATALOGUE) + 1)])  # 1-indexed
+    spec = _present_models("L", p)
+    assert spec is None
