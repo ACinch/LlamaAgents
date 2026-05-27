@@ -24,6 +24,16 @@ class _ScriptedClient:
         return self._response
 
 
+class _ErroringClient:
+    """Raises a given exception on every call to chat()."""
+
+    def __init__(self, exc: Exception):
+        self._exc = exc
+
+    async def chat(self, **_):
+        raise self._exc
+
+
 class _StubRuntime:
     """Minimal runtime: hands out fresh Agents with a scripted client."""
 
@@ -111,3 +121,30 @@ async def test_ignored_extensions_are_skipped(queue_cfg, tmp_path):
     assert (tmp_path / "inbox" / "skip.tmp").exists()
     assert not (tmp_path / "processing" / "skip.tmp").exists()
     assert not (tmp_path / "done" / "skip.tmp").exists()
+
+
+@pytest.mark.asyncio
+async def test_non_infra_error_lands_in_failed(queue_cfg, tmp_path):
+    from llama_agents.errors import LlamaProtocolError
+
+    ensure_dirs(queue_cfg.root)
+    (tmp_path / "inbox" / "boom.md").write_text("trigger")
+
+    rt = _StubRuntime(lambda: _ErroringClient(LlamaProtocolError("bad shape")))
+    worker = JobQueueWorker(rt, queue_cfg)
+    task = asyncio.create_task(worker.run())
+    try:
+        ok = await _wait_until(lambda: (tmp_path / "failed" / "boom.md").exists())
+        assert ok
+    finally:
+        await worker.drain(timeout=1.0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    err_text = (tmp_path / "failed" / "boom.error.txt").read_text()
+    assert "LlamaProtocolError" in err_text
+    assert "bad shape" in err_text
+    assert (tmp_path / "failed" / "boom.events.jsonl").exists()
