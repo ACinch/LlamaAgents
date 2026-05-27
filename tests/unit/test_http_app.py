@@ -108,6 +108,38 @@ async def test_lifespan_starts_queue_worker_when_enabled(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_lifespan_resolves_relative_queue_root_against_sandbox(tmp_path: Path):
+    """Regression test for I3: relative cfg.queue.root must be resolved
+    against cfg.sandbox.allowed_dirs[0], not against the process cwd."""
+    from asgi_lifespan import LifespanManager
+    from llama_agents.config import MemoryConfig
+
+    cfg = Config(
+        llama=LlamaConfig(auto_spawn=False),
+        sandbox=SandboxConfig(allowed_dirs=[tmp_path]),
+        queue=QueueConfig(
+            enabled=True,
+            root=Path(".llama_agents/queue"),  # relative — must resolve against tmp_path
+            poll_interval_seconds=0.05, max_concurrent=1,
+            drain_timeout_seconds=1.0, max_iterations=3,
+        ),
+    )
+    app = create_app(cfg, client_factory=lambda url: _FakeClient())
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test"):
+            resolved_inbox = tmp_path / ".llama_agents" / "queue" / "inbox"
+            # Wait for the worker's __init__ to have created the folder.
+            for _ in range(40):
+                if resolved_inbox.is_dir():
+                    break
+                await asyncio.sleep(0.05)
+            assert resolved_inbox.is_dir(), (
+                f"queue root not resolved against sandbox; expected {resolved_inbox}"
+            )
+
+
+@pytest.mark.asyncio
 async def test_lifespan_does_not_start_worker_when_disabled(tmp_path: Path):
     from asgi_lifespan import LifespanManager
 

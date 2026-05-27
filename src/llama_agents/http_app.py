@@ -14,7 +14,7 @@ from .agent import AgentRunOptions
 from .config import Config
 from .events import AssistantChunk, Done, LoopError, MemoryEvicted, MemoryStored, ToolCallResult, ToolCallStart
 from .queue.worker import JobQueueWorker
-from .runtime import Runtime
+from .runtime import Runtime, _resolve_queue_root
 
 
 class ChatRequest(BaseModel):
@@ -37,7 +37,8 @@ def create_app(
         rt = await Runtime.create(cfg, client_factory=client_factory)
         runtime_box["rt"] = rt
         if cfg.queue.enabled:
-            worker = JobQueueWorker(rt, cfg.queue)
+            resolved_queue = cfg.queue.model_copy(update={"root": _resolve_queue_root(cfg)})
+            worker = JobQueueWorker(rt, resolved_queue)
             worker_box["worker"] = worker
             worker_task_box["task"] = asyncio.create_task(worker.run())
         try:

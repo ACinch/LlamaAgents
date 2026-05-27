@@ -145,3 +145,12 @@ def _resolve_memory_root(cfg: Config) -> Path:
         return p
     base = cfg.sandbox.allowed_dirs[0] if cfg.sandbox.allowed_dirs else Path.cwd()
     return base / root_cfg
+
+
+def _resolve_queue_root(cfg: Config) -> Path:
+    root_cfg = cfg.queue.root
+    p = Path(root_cfg)
+    if p.is_absolute():
+        return p
+    base = cfg.sandbox.allowed_dirs[0] if cfg.sandbox.allowed_dirs else Path.cwd()
+    return base / root_cfg
