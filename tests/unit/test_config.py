@@ -71,13 +71,14 @@ def test_memory_config_defaults():
 
     cfg = Config.model_validate({})
     assert cfg.memory.enabled is True
-    assert cfg.memory.root == "_llama_agents/memory" or cfg.memory.root == ".llama_agents/memory"
+    assert cfg.memory.root == ".llama_agents/memory"
     assert cfg.memory.embedding_model == "BAAI/bge-small-en-v1.5"
     assert cfg.memory.chunk_size == 1500
     assert cfg.memory.chunk_overlap == 150
     assert cfg.memory.plan_recall_k == 3
-    assert 0.0 <= cfg.memory.plan_recall_threshold <= 1.0
+    assert cfg.memory.plan_recall_threshold == 0.5
     assert cfg.memory.subagent_inline_threshold_chars == 2000
+    assert cfg.memory.subagent_summary_max_tokens == 400
     assert cfg.memory.evict_threshold_pct == 70
     assert cfg.memory.evict_tool_result_min_chars == 4000
     assert cfg.memory.scratch_retention_hours == 24
