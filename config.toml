@@ -41,3 +41,14 @@ subagent_summary_max_tokens = 400
 evict_threshold_pct = 70
 evict_tool_result_min_chars = 4000
 scratch_retention_hours = 24
+
+[queue]
+enabled = false
+# root = ".llama_agents/queue"          # default
+# poll_interval_seconds = 2.0
+# max_concurrent = 1
+# max_retries = 2
+# retry_backoff_seconds = 5.0
+# max_iterations = 20
+# drain_timeout_seconds = 30.0
+# accepted_extensions = [".md", ".txt"]

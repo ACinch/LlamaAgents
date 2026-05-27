@@ -12,3 +12,4 @@ htmlcov/
 .mcp.json
 docs/examples/_*.md
 .llama_agents/memory/
+.llama_agents/queue/
