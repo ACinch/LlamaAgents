@@ -196,3 +196,21 @@ def locate_llama_server(repo_root: Path) -> Path | None:
         if found:
             return Path(found)
     return None
+
+
+def model_search_dirs(repo_root: Path) -> list[Path]:
+    """Return the canonical search order for GGUF model files."""
+    return [
+        repo_root / "GGUF",
+        repo_root.parent / "GGUF",
+        Path.home() / "GGUF",
+    ]
+
+
+def find_existing_model(spec: ModelSpec, repo_root: Path) -> Path | None:
+    """Search for a model matching spec in known directories. Returns first hit or None."""
+    for d in model_search_dirs(repo_root):
+        candidate = d / spec.hf_filename
+        if candidate.is_file():
+            return candidate
+    return None

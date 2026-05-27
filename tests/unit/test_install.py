@@ -182,3 +182,52 @@ def test_locate_prefers_build_release_over_llamacpp_bin(tmp_path: Path):
     b.parent.mkdir(parents=True)
     b.write_bytes(b"\0")
     assert locate_llama_server(repo) == a
+
+
+from llama_agents.install import find_existing_model, model_search_dirs
+
+
+def test_model_search_dirs_lists_three_locations(tmp_path: Path):
+    repo = tmp_path / "llama-agents"
+    repo.mkdir()
+    dirs = model_search_dirs(repo)
+    assert dirs[0] == repo / "GGUF"
+    assert dirs[1] == repo.parent / "GGUF"
+    # third entry is ~/GGUF — just check the name; home varies per machine
+    assert dirs[2].name == "GGUF"
+
+
+def test_find_existing_model_returns_first_hit(tmp_path: Path, monkeypatch):
+    repo = tmp_path / "llama-agents"
+    repo.mkdir()
+    target = repo / "GGUF" / "Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf"
+    target.parent.mkdir()
+    target.write_bytes(b"\0")
+    # Force the third (home) entry to be tmp-path-anchored so the test stays sandboxed.
+    monkeypatch.setattr(
+        "llama_agents.install.model_search_dirs",
+        lambda r: [r / "GGUF", r.parent / "GGUF", tmp_path / "fake_home" / "GGUF"],
+    )
+    spec = CATALOGUE[0]
+    assert find_existing_model(spec, repo) == target
+
+
+def test_find_existing_model_returns_none_when_absent(tmp_path: Path, monkeypatch):
+    repo = tmp_path / "llama-agents"
+    repo.mkdir()
+    monkeypatch.setattr(
+        "llama_agents.install.model_search_dirs",
+        lambda r: [r / "GGUF", r.parent / "GGUF", tmp_path / "fake_home" / "GGUF"],
+    )
+    assert find_existing_model(CATALOGUE[0], repo) is None
+
+
+def test_find_existing_model_skips_missing_dirs(tmp_path: Path, monkeypatch):
+    """If a search dir doesn't exist, we should not crash."""
+    repo = tmp_path / "llama-agents"
+    repo.mkdir()
+    monkeypatch.setattr(
+        "llama_agents.install.model_search_dirs",
+        lambda r: [r / "absent1", r / "absent2", tmp_path / "absent3"],
+    )
+    assert find_existing_model(CATALOGUE[0], repo) is None
