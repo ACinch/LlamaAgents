@@ -214,3 +214,26 @@ def find_existing_model(spec: ModelSpec, repo_root: Path) -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+def collect_allowed_dirs(repo_root: Path, prompter: Prompter) -> list[Path]:
+    """Build allowed_dirs list: seed with repo_root, loop for additions."""
+    result: list[Path] = [repo_root.resolve()]
+    while True:
+        raw = prompter.ask(
+            "Add another path? (empty to finish)", default=""
+        )
+        if not raw:
+            return result
+        p = Path(raw)
+        if not p.exists():
+            prompter.warn(f"{p} does not exist; try again.")
+            continue
+        if not p.is_dir():
+            prompter.warn(f"{p} is not a directory; try again.")
+            continue
+        resolved = p.resolve()
+        if resolved in result:
+            prompter.info(f"{resolved} already in list; skipping.")
+            continue
+        result.append(resolved)

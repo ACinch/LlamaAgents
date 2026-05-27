@@ -231,3 +231,56 @@ def test_find_existing_model_skips_missing_dirs(tmp_path: Path, monkeypatch):
         lambda r: [r / "absent1", r / "absent2", tmp_path / "absent3"],
     )
     assert find_existing_model(CATALOGUE[0], repo) is None
+
+
+from llama_agents.install import collect_allowed_dirs
+
+
+def test_collect_allowed_dirs_seeds_with_repo_root(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    p = RecordedPrompter(answers=[""])  # immediately finish
+    dirs = collect_allowed_dirs(repo, p)
+    assert dirs == [repo.resolve()]
+
+
+def test_collect_allowed_dirs_appends_user_inputs(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    p = RecordedPrompter(answers=[str(extra), ""])
+    dirs = collect_allowed_dirs(repo, p)
+    assert dirs == [repo.resolve(), extra.resolve()]
+
+
+def test_collect_allowed_dirs_dedupes(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    p = RecordedPrompter(answers=[str(repo), ""])  # try to add repo again
+    dirs = collect_allowed_dirs(repo, p)
+    assert dirs == [repo.resolve()]
+
+
+def test_collect_allowed_dirs_rejects_nonexistent_and_reprompts(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    real = tmp_path / "real"
+    real.mkdir()
+    p = RecordedPrompter(answers=[str(tmp_path / "nope"), str(real), ""])
+    dirs = collect_allowed_dirs(repo, p)
+    assert dirs == [repo.resolve(), real.resolve()]
+    assert any("does not exist" in m[1] for m in p.messages)
+
+
+def test_collect_allowed_dirs_rejects_files_and_reprompts(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    afile = tmp_path / "afile.txt"
+    afile.write_text("x")
+    real = tmp_path / "real"
+    real.mkdir()
+    p = RecordedPrompter(answers=[str(afile), str(real), ""])
+    dirs = collect_allowed_dirs(repo, p)
+    assert dirs == [repo.resolve(), real.resolve()]
+    assert any("not a directory" in m[1] for m in p.messages)
