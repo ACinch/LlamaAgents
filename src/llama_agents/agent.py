@@ -54,6 +54,8 @@ class AgentRunOptions:
     max_planning_iterations: int = 3
     """Maximum plan-then-review cycles. After this many rejections the
     most recent plan is used as-is."""
+    plan_recall_k: int = 3
+    plan_recall_threshold: float = 0.5
 
 
 class Agent:
@@ -183,6 +185,22 @@ class Agent:
             "the task's stated goal, or steps are vague hand-waves."
         )
 
+        prior = []
+        try:
+            prior = await self._memory.recall(
+                query=user_prompt, scope="plans",
+                k=opts.plan_recall_k,
+                min_score=opts.plan_recall_threshold,
+            )
+        except Exception as e:  # noqa: BLE001
+            import sys
+            print(f"[memory] plan recall failed: {e}", file=sys.stderr)
+        if prior:
+            banner = "\n\nPRIOR ACCEPTED PLANS FOR SIMILAR TASKS:\n" + \
+                "\n---\n".join(c.text for c in prior)
+            planner_system = planner_system + banner
+            reviewer_system = reviewer_system + banner
+
         plan_history: list[dict[str, Any]] = [
             {"role": "system", "content": planner_system},
             {"role": "user", "content": user_prompt},
@@ -227,6 +245,14 @@ class Agent:
             accepted = verdict.upper().startswith("ACCEPT")
             yield PlanReviewed(attempt=attempt, accepted=accepted, feedback=verdict)
             if accepted:
+                try:
+                    await self._memory.store_plan(
+                        task=user_prompt, plan=last_plan,
+                        accepted_attempt=attempt, run_id=self._run_id,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    import sys
+                    print(f"[memory] plan store failed: {e}", file=sys.stderr)
                 yield PlanAccepted(plan=last_plan, attempts=attempt)
                 return
             plan_history.append({"role": "assistant", "content": last_plan})
@@ -242,6 +268,15 @@ class Agent:
             )
 
         # Exhausted retries — accept the last attempt rather than block the loop.
+        try:
+            await self._memory.store_plan(
+                task=user_prompt, plan=last_plan,
+                accepted_attempt=opts.max_planning_iterations,
+                run_id=self._run_id,
+            )
+        except Exception as e:  # noqa: BLE001
+            import sys
+            print(f"[memory] plan store failed: {e}", file=sys.stderr)
         yield PlanAccepted(plan=last_plan, attempts=opts.max_planning_iterations)
 
 
