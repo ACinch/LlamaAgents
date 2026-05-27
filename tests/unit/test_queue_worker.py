@@ -327,3 +327,77 @@ async def test_concurrency_cap_is_respected(tmp_path):
     assert max(observed) <= 2, f"saw in-flight={max(observed)} (cap=2)"
     # At least one sample should have hit the cap.
     assert max(observed) >= 2
+
+
+class _BlockingClient:
+    """Never returns — useful for testing cancellation."""
+
+    async def chat(self, **_):
+        await asyncio.Event().wait()  # blocks forever
+        raise RuntimeError("unreachable")
+
+
+@pytest.mark.asyncio
+async def test_drain_cancels_in_flight_and_leaves_file_in_processing(tmp_path):
+    cfg = QueueConfig(
+        enabled=True, root=tmp_path,
+        poll_interval_seconds=0.02, max_concurrent=1,
+        max_retries=0, retry_backoff_seconds=0.0,
+        max_iterations=5, drain_timeout_seconds=0.1,
+    )
+    ensure_dirs(cfg.root)
+    (tmp_path / "inbox" / "stuck.md").write_text("never returns")
+
+    rt = _StubRuntime(lambda: _BlockingClient())
+    worker = JobQueueWorker(rt, cfg)
+    task = asyncio.create_task(worker.run())
+    try:
+        ok = await _wait_until(
+            lambda: (tmp_path / "processing" / "stuck.md").exists(),
+            timeout=1.0,
+        )
+        assert ok
+    finally:
+        await worker.drain(timeout=0.1)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    # File remains in processing/, NOT in done/ or failed/.
+    assert (tmp_path / "processing" / "stuck.md").exists()
+    assert not (tmp_path / "done" / "stuck.md").exists()
+    assert not (tmp_path / "failed" / "stuck.md").exists()
+
+
+@pytest.mark.asyncio
+async def test_new_worker_sweeps_processing_back_into_inbox(tmp_path):
+    cfg = QueueConfig(
+        enabled=True, root=tmp_path,
+        poll_interval_seconds=0.05, max_concurrent=1,
+        max_retries=0, retry_backoff_seconds=0.0,
+        max_iterations=5, drain_timeout_seconds=2.0,
+    )
+    ensure_dirs(cfg.root)
+    # Simulate a prior crash: a file left in processing/.
+    (tmp_path / "processing" / "recovered.md").write_text("was stuck")
+
+    rt = _StubRuntime(lambda: _ScriptedClient(ChatResponse(content="done now")))
+    worker = JobQueueWorker(rt, cfg)
+    task = asyncio.create_task(worker.run())
+    try:
+        ok = await _wait_until(
+            lambda: (tmp_path / "done" / "recovered.md").exists(),
+            timeout=2.0,
+        )
+        assert ok
+    finally:
+        await worker.drain(timeout=1.0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert (tmp_path / "done" / "recovered.md").read_text() == "done now"
