@@ -6,7 +6,8 @@ kill_on_exit = true
 server_bin = "D:/repos/llm/llama.cpp/build/bin/Release/llama-server.exe"
 model_path = "D:/repos/LLM/GGUF/Qwen36/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q2_K_P.gguf"
 ngl = 999
-ctx_size = 32768
+ctx_size = 65536
+n_parallel = 2
 startup_timeout_seconds = 300
 
 [agent]
@@ -15,7 +16,7 @@ max_concurrent_agents = 5
 token_budget_pct = 0.8
 
 [sandbox]
-allowed_dirs = ["D:/repos/LLM/llama-agents"]
+allowed_dirs = ["D:/repos/LLM/llama-agents","C:/backup/Private/Stories"]
 shell_allowlist = ["git", "pytest"]
 
 [http]

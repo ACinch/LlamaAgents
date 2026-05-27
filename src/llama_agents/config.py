@@ -15,7 +15,8 @@ class LlamaConfig(BaseModel):
     server_bin: Path | None = None
     model_path: Path | None = None
     ngl: int = 999
-    ctx_size: int = 32768
+    ctx_size: int = 65536
+    n_parallel: int = 2
     startup_timeout_seconds: int = 60
 
 

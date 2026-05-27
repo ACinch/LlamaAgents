@@ -51,6 +51,7 @@ class LlamaClient:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         temperature: float = 0.2,
+        reasoning_budget_tokens: int | None = None,
     ) -> ChatResponse:
         payload: dict[str, Any] = {
             "messages": messages,
@@ -58,6 +59,8 @@ class LlamaClient:
         }
         if tools:
             payload["tools"] = tools
+        if reasoning_budget_tokens is not None:
+            payload["reasoning_budget_tokens"] = reasoning_budget_tokens
 
         try:
             r = await self._client.post("/v1/chat/completions", json=payload)
@@ -124,6 +127,7 @@ class LlamaServerManager:
                 "-m", str(self._cfg.model_path),
                 "-ngl", str(self._cfg.ngl),
                 "-c", str(self._cfg.ctx_size),
+                "--parallel", str(self._cfg.n_parallel),
             ],
         )
         deadline = self._cfg.startup_timeout_seconds

@@ -9,7 +9,7 @@ from llama_agents.runtime import Runtime
 
 
 class FakeClient:
-    async def chat(self, *, messages, tools, temperature=0.2):
+    async def chat(self, *, messages, tools, temperature=0.2, reasoning_budget_tokens=None):
         return ChatResponse(content="done")
 
     async def health(self) -> bool:

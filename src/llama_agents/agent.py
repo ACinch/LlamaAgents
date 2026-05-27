@@ -10,6 +10,9 @@ from .events import (
     Done,
     Event,
     LoopError,
+    PlanAccepted,
+    PlanProposed,
+    PlanReviewed,
     ToolCallResult,
     ToolCallStart,
 )
@@ -24,6 +27,7 @@ class _ClientLike(Protocol):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         temperature: float = ...,
+        reasoning_budget_tokens: int | None = ...,
     ) -> ChatResponse: ...
 
 
@@ -35,6 +39,20 @@ class AgentRunOptions:
         "and query the RAG when helpful. When finished, reply in plain text."
     )
     temperature: float = 0.2
+    reasoning_budget_tokens: int | None = 8000
+    """Per-turn cap on extended-reasoning tokens (Qwen3/DeepSeek-R1 style
+    <think> blocks). Default 8000 fits comfortably inside a 64k context and
+    gives the planner room for genuine chain-of-thought without runaway
+    monologues. Set to None to defer to the server default (unlimited —
+    only safe for well-behaved models). Set to 0 to disable thinking."""
+    skip_planning: bool = False
+    """If False (default), Agent.run() runs a plan + self-review phase
+    before the main tool loop, but ONLY when the registry includes
+    subagent_spawn (i.e. only for orchestrator agents — subagents skip it
+    to avoid recursion). Set True to suppress unconditionally."""
+    max_planning_iterations: int = 3
+    """Maximum plan-then-review cycles. After this many rejections the
+    most recent plan is used as-is."""
 
 
 class Agent:
@@ -55,9 +73,22 @@ class Agent:
     async def run(
         self, user_prompt: str, opts: AgentRunOptions
     ) -> AsyncIterator[Event]:
+        effective_prompt = user_prompt
+        if self._should_plan(opts):
+            async for ev in self._plan_and_review(user_prompt, opts):
+                yield ev
+                if isinstance(ev, PlanAccepted):
+                    effective_prompt = (
+                        "APPROVED PLAN (already reviewed — execute it; do not "
+                        "re-plan):\n"
+                        f"{ev.plan}\n\n"
+                        "ORIGINAL TASK:\n"
+                        f"{user_prompt}"
+                    )
+
         self.messages = [
             {"role": "system", "content": opts.system_prompt},
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": effective_prompt},
         ]
         for _ in range(opts.max_iterations):
             if self._cancel.is_set():
@@ -69,6 +100,7 @@ class Agent:
                     messages=self.messages,
                     tools=self._registry.schemas(),
                     temperature=opts.temperature,
+                    reasoning_budget_tokens=opts.reasoning_budget_tokens,
                 )
             except LlamaAgentsError as e:
                 yield LoopError(error_type=type(e).__name__, message=str(e))
@@ -105,6 +137,96 @@ class Agent:
                 )
 
         yield Done(reason="max_iterations")
+
+    def _should_plan(self, opts: AgentRunOptions) -> bool:
+        if opts.skip_planning:
+            return False
+        # Subagents (registries without subagent_spawn) skip planning to
+        # prevent unbounded recursion.
+        return "subagent_spawn" in self._registry.names()
+
+    async def _plan_and_review(
+        self, user_prompt: str, opts: AgentRunOptions
+    ) -> AsyncIterator[Event]:
+        tool_names = ", ".join(sorted(self._registry.names()))
+        planner_system = (
+            "You are a planning agent. Produce a concise numbered plan (3-8 "
+            "steps) for accomplishing the user's task. Each step must name a "
+            "specific tool to call and the arguments it should receive when "
+            "the step is executed. Available tools: " + tool_names + ". "
+            "Output ONLY the numbered list — no preamble, no explanation."
+        )
+        reviewer_system = (
+            "You are a strict plan reviewer. Reply with EXACTLY one of:\n"
+            "  ACCEPT\n"
+            "  REJECT: <one short sentence explaining the most important "
+            "problem>\n"
+            "Reject if any step references a tool that does not exist, the "
+            "plan would obviously exceed the context window (e.g. asking "
+            "fs_list_files for a base that contains .venv), the plan skips "
+            "the task's stated goal, or steps are vague hand-waves."
+        )
+
+        plan_history: list[dict[str, Any]] = [
+            {"role": "system", "content": planner_system},
+            {"role": "user", "content": user_prompt},
+        ]
+        last_plan = ""
+        for attempt in range(1, opts.max_planning_iterations + 1):
+            if self._cancel.is_set():
+                return
+            try:
+                plan_resp = await self._client.chat(
+                    messages=plan_history,
+                    tools=[],
+                    temperature=opts.temperature,
+                    reasoning_budget_tokens=opts.reasoning_budget_tokens,
+                )
+            except LlamaAgentsError as e:
+                yield LoopError(error_type=type(e).__name__, message=str(e))
+                return
+            last_plan = (plan_resp.content or "").strip()
+            yield PlanProposed(attempt=attempt, plan=last_plan)
+
+            review_msgs = [
+                {"role": "system", "content": reviewer_system},
+                {
+                    "role": "user",
+                    "content": (
+                        "TASK:\n" + user_prompt + "\n\nPROPOSED PLAN:\n" + last_plan
+                    ),
+                },
+            ]
+            try:
+                rev_resp = await self._client.chat(
+                    messages=review_msgs,
+                    tools=[],
+                    temperature=0.0,
+                    reasoning_budget_tokens=opts.reasoning_budget_tokens,
+                )
+            except LlamaAgentsError as e:
+                yield LoopError(error_type=type(e).__name__, message=str(e))
+                return
+            verdict = (rev_resp.content or "").strip()
+            accepted = verdict.upper().startswith("ACCEPT")
+            yield PlanReviewed(attempt=attempt, accepted=accepted, feedback=verdict)
+            if accepted:
+                yield PlanAccepted(plan=last_plan, attempts=attempt)
+                return
+            plan_history.append({"role": "assistant", "content": last_plan})
+            plan_history.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"Reviewer rejected: {verdict}\n"
+                        "Revise the plan addressing the rejection. Output the "
+                        "full revised numbered list only."
+                    ),
+                }
+            )
+
+        # Exhausted retries — accept the last attempt rather than block the loop.
+        yield PlanAccepted(plan=last_plan, attempts=opts.max_planning_iterations)
 
 
 def _as_tool_text(ok: bool, content: Any) -> str:

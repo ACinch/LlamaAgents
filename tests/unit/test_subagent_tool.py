@@ -15,7 +15,7 @@ class ScriptedClient:
         self.scripts = scripts
         self.session_for_prompt: dict[str, str] = {}
 
-    async def chat(self, *, messages, tools, temperature=0.2):
+    async def chat(self, *, messages, tools, temperature=0.2, reasoning_budget_tokens=None):
         # Route by the first user message text.
         for m in messages:
             if m["role"] == "user":

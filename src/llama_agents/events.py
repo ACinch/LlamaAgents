@@ -34,6 +34,25 @@ class LoopError(Event):
 
 
 @dataclass
+class PlanProposed(Event):
+    attempt: int
+    plan: str
+
+
+@dataclass
+class PlanReviewed(Event):
+    attempt: int
+    accepted: bool
+    feedback: str
+
+
+@dataclass
+class PlanAccepted(Event):
+    plan: str
+    attempts: int
+
+
+@dataclass
 class Done(Event):
     reason: str  # "finished" | "max_iterations" | "cancelled" | "token_budget"
     final_message: str | None = None

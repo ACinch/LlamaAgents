@@ -85,6 +85,40 @@ async def test_chat_raises_on_bad_shape():
         await client.chat(messages=[{"role": "user", "content": "x"}], tools=[])
 
 
+async def test_chat_includes_reasoning_budget_when_set():
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+        )
+
+    client = LlamaClient(base_url="http://x", transport=_mock_transport(handler))
+    await client.chat(
+        messages=[{"role": "user", "content": "x"}],
+        tools=[],
+        reasoning_budget_tokens=4000,
+    )
+    assert seen["body"]["reasoning_budget_tokens"] == 4000
+
+
+async def test_chat_omits_reasoning_budget_when_unset():
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+        )
+
+    client = LlamaClient(base_url="http://x", transport=_mock_transport(handler))
+    await client.chat(messages=[{"role": "user", "content": "x"}], tools=[])
+    assert "reasoning_budget_tokens" not in seen["body"]
+
+
 async def test_health_returns_bool():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"status": "ok"})
