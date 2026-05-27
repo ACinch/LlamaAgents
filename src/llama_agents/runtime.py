@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import Callable, Protocol
 
-from .agent import Agent
+from .agent import Agent, get_active_run_id
 from .config import Config
 from .llama_client import LlamaClient, LlamaServerManager
 from .memory.embedder import FastEmbedEmbedder
@@ -48,7 +48,6 @@ class Runtime:
         self.registry = registry
         self.semaphore = semaphore
         self.memory = memory
-        self._current_run_id: str | None = None
 
     @classmethod
     async def create(
@@ -107,7 +106,7 @@ class Runtime:
 
         # memory_recall tool (always available — InertMemoryStore returns [])
         registry.register(
-            MemoryRecallTool(store=rt.memory, run_id_getter=lambda: rt._current_run_id)
+            MemoryRecallTool(store=rt.memory, run_id_getter=get_active_run_id)
         )
 
         # Inject the spawn tool last (it needs the runtime to make new agents).
@@ -119,20 +118,15 @@ class Runtime:
                 client_for_summary=rt.client,
                 inline_threshold_chars=cfg.memory.subagent_inline_threshold_chars,
                 summary_max_tokens=cfg.memory.subagent_summary_max_tokens,
-                parent_run_id_getter=lambda: rt._current_run_id,
             )
         )
         return rt
 
     def new_agent(self) -> Agent:
-        def _set_rid(rid: str | None) -> None:
-            self._current_run_id = rid
-
         return Agent(
             client=self.client,
             registry=self.registry.clone(),
             memory=self.memory,
-            on_run_id=_set_rid,
         )
 
     async def aclose(self) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Callable, Protocol
 
@@ -11,12 +12,22 @@ from .events import (
     Event,
     LoopError,
     MemoryEvicted,
+    MemoryStored,
     PlanAccepted,
     PlanProposed,
     PlanReviewed,
     ToolCallResult,
     ToolCallStart,
 )
+
+
+_ACTIVE_RUN_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "llama_agents_active_run_id", default=None
+)
+
+
+def get_active_run_id() -> str | None:
+    return _ACTIVE_RUN_ID.get()
 from .llama_client import ChatResponse
 from .memory.store import InertMemoryStore, MemoryStore
 from .tools.registry import ToolRegistry
@@ -69,12 +80,10 @@ class Agent:
         client: _ClientLike,
         registry: ToolRegistry,
         memory: "MemoryStore | InertMemoryStore | None" = None,
-        on_run_id: "Callable[[str | None], None] | None" = None,
     ) -> None:
         self._client = client
         self._registry = registry
         self._memory = memory or InertMemoryStore()
-        self._on_run_id = on_run_id
         self._cancel = asyncio.Event()
         self._run_id: str | None = None
         self.messages: list[dict[str, Any]] = []
@@ -83,13 +92,13 @@ class Agent:
         self._cancel.set()
 
     async def run(
-        self, user_prompt: str, opts: AgentRunOptions
+        self, user_prompt: str, opts: AgentRunOptions, *,
+        run_id: str | None = None,
     ) -> AsyncIterator[Event]:
         import uuid
-        self._run_id = uuid.uuid4().hex[:24]
+        self._run_id = run_id or uuid.uuid4().hex[:24]
         self._memory.start_run(self._run_id)
-        if self._on_run_id is not None:
-            self._on_run_id(self._run_id)
+        token = _ACTIVE_RUN_ID.set(self._run_id)
         try:
             effective_prompt = user_prompt
             if self._should_plan(opts):
@@ -159,9 +168,8 @@ class Agent:
 
             yield Done(reason="max_iterations")
         finally:
+            _ACTIVE_RUN_ID.reset(token)
             await self._memory.end_run(self._run_id)
-            if self._on_run_id is not None:
-                self._on_run_id(None)
 
     _EST_CHARS_PER_TOKEN: float = 3.5
 
@@ -190,6 +198,10 @@ class Agent:
                 import sys
                 print(f"[memory] eviction store failed: {e}", file=sys.stderr)
                 continue
+            if not blob_id:
+                # Inert store (or other no-op) returned empty; skip rewrite to
+                # avoid destroying the message body irrecoverably.
+                continue
             freed = len(body)
             stub = (
                 f"[evicted to memory — use memory_recall("
@@ -197,6 +209,8 @@ class Agent:
                 f"Original size: {freed} chars.]"
             )
             msg["content"] = stub
+            yield MemoryStored(blob_id=blob_id, kind="evicted_tool",
+                               scope="run", bytes_=freed)
             yield MemoryEvicted(blob_id=blob_id, turn=i,
                                 bytes_freed=freed - len(stub))
             est -= (freed - len(stub)) / self._EST_CHARS_PER_TOKEN
@@ -292,14 +306,18 @@ class Agent:
             accepted = verdict.upper().startswith("ACCEPT")
             yield PlanReviewed(attempt=attempt, accepted=accepted, feedback=verdict)
             if accepted:
+                blob_id = ""
                 try:
-                    await self._memory.store_plan(
+                    blob_id = await self._memory.store_plan(
                         task=user_prompt, plan=last_plan,
                         accepted_attempt=attempt, run_id=self._run_id,
                     )
                 except Exception as e:  # noqa: BLE001
                     import sys
                     print(f"[memory] plan store failed: {e}", file=sys.stderr)
+                if blob_id:
+                    yield MemoryStored(blob_id=blob_id, kind="plan",
+                                       scope="plans", bytes_=len(last_plan))
                 yield PlanAccepted(plan=last_plan, attempts=attempt)
                 return
             plan_history.append({"role": "assistant", "content": last_plan})
@@ -315,8 +333,9 @@ class Agent:
             )
 
         # Exhausted retries — accept the last attempt rather than block the loop.
+        blob_id = ""
         try:
-            await self._memory.store_plan(
+            blob_id = await self._memory.store_plan(
                 task=user_prompt, plan=last_plan,
                 accepted_attempt=opts.max_planning_iterations,
                 run_id=self._run_id,
@@ -324,6 +343,9 @@ class Agent:
         except Exception as e:  # noqa: BLE001
             import sys
             print(f"[memory] plan store failed: {e}", file=sys.stderr)
+        if blob_id:
+            yield MemoryStored(blob_id=blob_id, kind="plan",
+                               scope="plans", bytes_=len(last_plan))
         yield PlanAccepted(plan=last_plan, attempts=opts.max_planning_iterations)
 
 

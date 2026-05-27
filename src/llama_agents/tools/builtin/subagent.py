@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable
 
-from ...agent import Agent, AgentRunOptions
+from ...agent import Agent, AgentRunOptions, get_active_run_id
 from ...errors import AgentLimitExceeded
 from ...events import AssistantChunk, Done, ToolCallResult, ToolCallStart
 from ...memory.store import InertMemoryStore, MemoryStore
@@ -49,7 +49,6 @@ class SpawnSubagentTool(Tool):
         client_for_summary: Any = None,
         inline_threshold_chars: int = 2000,
         summary_max_tokens: int = 400,
-        parent_run_id_getter: Callable[[], str | None] | None = None,
     ) -> None:
         self._factory = agent_factory
         self._sem = semaphore
@@ -57,7 +56,6 @@ class SpawnSubagentTool(Tool):
         self._client = client_for_summary
         self._inline_threshold = inline_threshold_chars
         self._summary_max_tokens = summary_max_tokens
-        self._parent_run_id_getter = parent_run_id_getter or (lambda: None)
 
     async def invoke(self, args: dict[str, Any]) -> dict[str, Any]:
         if not self._sem.locked() and self._sem._value > 0:  # type: ignore[attr-defined]
@@ -66,6 +64,7 @@ class SpawnSubagentTool(Tool):
         if not acquired:
             raise AgentLimitExceeded("max_concurrent_agents reached")
 
+        parent_rid = get_active_run_id()
         try:
             subagent = self._factory()
             allowed = args.get("allowed_tools")
@@ -87,7 +86,7 @@ class SpawnSubagentTool(Tool):
             iterations = 0
             tool_calls = 0
             final_text = ""
-            async for ev in subagent.run(args["task"], opts):
+            async for ev in subagent.run(args["task"], opts, run_id=parent_rid):
                 if isinstance(ev, ToolCallStart):
                     tool_calls += 1
                 elif isinstance(ev, AssistantChunk):
@@ -105,7 +104,6 @@ class SpawnSubagentTool(Tool):
                     "tool_calls": tool_calls,
                 }
 
-            parent_rid = self._parent_run_id_getter()
             try:
                 blob_id = await self._memory.store_blob(
                     kind="subagent_output", scope="run",

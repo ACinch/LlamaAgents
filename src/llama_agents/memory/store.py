@@ -34,13 +34,23 @@ class MemoryStore:
         self._chunk_size = chunk_size
         self._chunk_overlap = chunk_overlap
         self._retention_hours = retention_hours
-        self._db = VectorDB(self._root / "index.sqlite", dim=embedder.dim)
+        self._db: VectorDB | None = None
         self._active_runs: set[str] = set()
+
+    def _require_db(self) -> VectorDB:
+        if self._db is None:
+            raise RuntimeError("MemoryStore.init() not called")
+        return self._db
 
     async def init(self) -> None:
         self._root.mkdir(parents=True, exist_ok=True)
         (self._root / "runs").mkdir(exist_ok=True)
         (self._root / "plans").mkdir(exist_ok=True)
+        # If the embedder has its own init (FastEmbed), load the model first
+        # so we can resolve the real dim.
+        if hasattr(self._embedder, "init"):
+            await self._embedder.init()
+        self._db = VectorDB(self._root / "index.sqlite", dim=self._embedder.dim)
         await self._db.init()
 
     def start_run(self, run_id: str) -> None:
@@ -54,7 +64,7 @@ class MemoryStore:
             await self.gc_expired()
 
     async def gc_expired(self) -> int:
-        expired = await self._db.list_expired_run_ids(
+        expired = await self._require_db().list_expired_run_ids(
             now_iso=_now_iso(), retention_hours=self._retention_hours
         )
         for rid in expired:
@@ -62,7 +72,7 @@ class MemoryStore:
         return len(expired)
 
     async def _purge_run(self, run_id: str) -> None:
-        await self._db.delete_blobs_for_run(run_id)
+        await self._require_db().delete_blobs_for_run(run_id)
         rd = self._root / "runs" / run_id
         if rd.exists():
             shutil.rmtree(rd, ignore_errors=True)
@@ -79,7 +89,8 @@ class MemoryStore:
     ) -> str:
         blob_id = _new_id()
         if scope == "run":
-            assert run_id, "run_id required for scope='run'"
+            if not run_id:
+                raise ValueError("run_id required for scope='run'")
             dir_ = self._root / "runs" / run_id
         elif scope == "plans":
             dir_ = self._root / "plans"
@@ -100,7 +111,7 @@ class MemoryStore:
             kind=kind, title=title, file_path=str(fp),
             metadata=metadata or {}, created_at=_now_iso(),
         )
-        await self._db.insert_blob(
+        await self._require_db().insert_blob(
             meta,
             chunks=[(_new_id(), v, t) for v, t in zip(vecs, chunks)],
         )
@@ -134,7 +145,7 @@ class MemoryStore:
         min_score: float | None = None,
     ) -> list[RecalledChunk]:
         [qvec] = await self._embedder.embed([query])
-        hits = await self._db.search(
+        hits = await self._require_db().search(
             qvec, scope=scope, run_id=run_id, blob_id=handle, k=k
         )
         out: list[RecalledChunk] = []
@@ -150,10 +161,11 @@ class MemoryStore:
     async def list_handles(
         self, *, scope: str, run_id: str | None = None
     ) -> list[BlobMeta]:
-        return await self._db.list_blobs(scope=scope, run_id=run_id)
+        return await self._require_db().list_blobs(scope=scope, run_id=run_id)
 
     async def close(self) -> None:
-        await self._db.close()
+        if self._db is not None:
+            await self._db.close()
 
 
 class InertMemoryStore:

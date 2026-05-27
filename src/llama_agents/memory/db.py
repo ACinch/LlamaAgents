@@ -189,6 +189,8 @@ class VectorDB:
                             "(b.scope = 'run' AND b.run_id = ?))"
                         )
                         params.append(run_id)
+                    else:
+                        sql += " AND b.scope = 'plans'"
             rows = self._conn.execute(sql, params).fetchall()
 
         if not rows:

@@ -22,6 +22,9 @@ class HashEmbedder:
     def dim(self) -> int:
         return self._dim
 
+    async def init(self) -> None:
+        return None
+
     async def embed(self, texts: list[str]) -> list[list[float]]:
         return [self._embed_one(t) for t in texts]
 
@@ -57,6 +60,9 @@ class FastEmbedEmbedder:
     @property
     def dim(self) -> int:
         return self._dim_cached or 384
+
+    async def init(self) -> None:
+        await self._ensure_loaded()
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:

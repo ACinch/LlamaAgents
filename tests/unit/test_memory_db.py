@@ -32,7 +32,7 @@ async def test_insert_and_search_returns_top_k(tmp_path: Path):
         chunks=[("c2a", _vec(0, 0, 1), "gamma")],
     )
 
-    hits = await db.search(_vec(1, 0, 0), scope="all", k=2)
+    hits = await db.search(_vec(1, 0, 0), scope="all", run_id="r1", k=2)
     assert hits[0][0] == "c1a"
     assert hits[0][2] > 0.99
 
