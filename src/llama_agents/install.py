@@ -154,3 +154,26 @@ def tier_defaults(tier: str) -> tuple[int, int]:
         "S": (8192, 1),
         "unknown": (8192, 1),
     }[tier]
+
+
+import subprocess
+
+
+def detect_vram_gb() -> float | None:
+    """Return the first GPU's total VRAM in GB, or None if undetectable."""
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5.0, check=True,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return None
+    lines = [line.strip() for line in out.stdout.splitlines() if line.strip()]
+    if not lines:
+        return None
+    try:
+        mib = int(lines[0])
+    except ValueError:
+        return None
+    return mib / 1024.0

@@ -79,3 +79,49 @@ def test_tier_defaults_match_spec():
     assert tier_defaults("M") == (32768, 2)
     assert tier_defaults("S") == (8192, 1)
     assert tier_defaults("unknown") == (8192, 1)
+
+
+import subprocess
+
+from llama_agents.install import detect_vram_gb
+
+
+def test_detect_vram_returns_gb_from_nvidia_smi(monkeypatch):
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args, returncode=0, stdout="24576\n", stderr=""
+        )
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert detect_vram_gb() == pytest.approx(24.0, abs=0.01)
+
+
+def test_detect_vram_picks_first_gpu(monkeypatch):
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args, returncode=0, stdout="16384\n8192\n", stderr=""
+        )
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert detect_vram_gb() == pytest.approx(16.0, abs=0.01)
+
+
+def test_detect_vram_returns_none_when_no_nvidia_smi(monkeypatch):
+    def fake_run(*args, **kwargs):
+        raise FileNotFoundError("nvidia-smi not found")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert detect_vram_gb() is None
+
+
+def test_detect_vram_returns_none_on_subprocess_error(monkeypatch):
+    def fake_run(*args, **kwargs):
+        raise subprocess.SubprocessError("boom")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert detect_vram_gb() is None
+
+
+def test_detect_vram_returns_none_on_garbage_output(monkeypatch):
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args, returncode=0, stdout="N/A\n", stderr=""
+        )
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert detect_vram_gb() is None
