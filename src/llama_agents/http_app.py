@@ -11,7 +11,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from .agent import AgentRunOptions
 from .config import Config
-from .events import AssistantChunk, Done, LoopError, ToolCallResult, ToolCallStart
+from .events import AssistantChunk, Done, LoopError, MemoryEvicted, MemoryStored, ToolCallResult, ToolCallStart
 from .runtime import Runtime
 
 
@@ -93,6 +93,20 @@ def _serialize(ev: Any) -> dict[str, str]:
             "event": "done",
             "data": json.dumps(
                 {"reason": ev.reason, "final_message": ev.final_message}
+            ),
+        }
+    if isinstance(ev, MemoryStored):
+        return {
+            "event": "memory_stored",
+            "data": json.dumps(
+                {"blob_id": ev.blob_id, "kind": ev.kind, "scope": ev.scope, "bytes": ev.bytes_}
+            ),
+        }
+    if isinstance(ev, MemoryEvicted):
+        return {
+            "event": "memory_evicted",
+            "data": json.dumps(
+                {"blob_id": ev.blob_id, "turn": ev.turn, "bytes_freed": ev.bytes_freed}
             ),
         }
     return {"event": "unknown", "data": "{}"}

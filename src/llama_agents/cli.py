@@ -16,7 +16,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 from .agent import AgentRunOptions
 from .config import load_config
-from .events import AssistantChunk, Done, LoopError, ToolCallResult, ToolCallStart
+from .events import AssistantChunk, Done, LoopError, MemoryEvicted, MemoryStored, ToolCallResult, ToolCallStart
 from .runtime import Runtime
 
 
@@ -29,6 +29,26 @@ def _default_config_path() -> Path:
     if env:
         return Path(env)
     return Path("config.toml")
+
+
+def _render_event(ev: object) -> None:
+    """Render a single agent event to the console / stderr."""
+    if isinstance(ev, AssistantChunk):
+        console.print(Markdown(ev.text))
+    elif isinstance(ev, ToolCallStart):
+        console.print(f"[dim]→ {ev.name}({ev.arguments})[/dim]")
+    elif isinstance(ev, ToolCallResult):
+        marker = "✓" if ev.ok else "✗"
+        console.print(f"[dim]  {marker} {str(ev.content)[:160]}[/dim]")
+    elif isinstance(ev, LoopError):
+        console.print(f"[red]{ev.error_type}: {ev.message}[/red]")
+    elif isinstance(ev, Done):
+        console.print(f"[dim](done: {ev.reason})[/dim]")
+    elif isinstance(ev, MemoryStored):
+        print(f"  ◦ stored {ev.kind} → mem:{ev.blob_id[:8]} ({ev.bytes_} B)", file=sys.stderr)
+    elif isinstance(ev, MemoryEvicted):
+        kb = ev.bytes_freed / 1024
+        print(f"  ◦ evicted tool result → -{kb:.1f} KB (mem:{ev.blob_id[:8]})", file=sys.stderr)
 
 
 @app.command()
@@ -62,16 +82,6 @@ async def _run_chat(config_path: Path, prompt: str, max_iterations: int) -> None
         agent = rt.new_agent()
         opts = AgentRunOptions(max_iterations=max_iterations)
         async for ev in agent.run(prompt, opts):
-            if isinstance(ev, AssistantChunk):
-                console.print(Markdown(ev.text))
-            elif isinstance(ev, ToolCallStart):
-                console.print(f"[dim]→ {ev.name}({ev.arguments})[/dim]")
-            elif isinstance(ev, ToolCallResult):
-                marker = "✓" if ev.ok else "✗"
-                console.print(f"[dim]  {marker} {str(ev.content)[:160]}[/dim]")
-            elif isinstance(ev, LoopError):
-                console.print(f"[red]{ev.error_type}: {ev.message}[/red]")
-            elif isinstance(ev, Done):
-                console.print(f"[dim](done: {ev.reason})[/dim]")
+            _render_event(ev)
     finally:
         await rt.aclose()

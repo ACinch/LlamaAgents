@@ -44,3 +44,22 @@ def test_chat_stream_endpoint_emits_sse(cfg: Config):
             body = "".join(r.iter_text())
             assert "hello from fake" in body
             assert "event: done" in body
+
+
+def test_serialize_memory_events():
+    import json
+    from llama_agents.http_app import _serialize
+    from llama_agents.events import MemoryEvicted, MemoryStored
+
+    stored = _serialize(MemoryStored(blob_id="abc123", kind="tool_result", scope="turn", bytes_=1024))
+    assert stored["event"] == "memory_stored"
+    data = json.loads(stored["data"])
+    assert data["blob_id"] == "abc123"
+    assert data["kind"] == "tool_result"
+    assert data["bytes"] == 1024
+
+    evicted = _serialize(MemoryEvicted(blob_id="abc123", turn=2, bytes_freed=512))
+    assert evicted["event"] == "memory_evicted"
+    data = json.loads(evicted["data"])
+    assert data["blob_id"] == "abc123"
+    assert data["bytes_freed"] == 512
