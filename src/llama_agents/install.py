@@ -156,7 +156,9 @@ def tier_defaults(tier: str) -> tuple[int, int]:
     }[tier]
 
 
+import shutil
 import subprocess
+from pathlib import Path
 
 
 def detect_vram_gb() -> float | None:
@@ -177,3 +179,20 @@ def detect_vram_gb() -> float | None:
     except ValueError:
         return None
     return mib / 1024.0
+
+
+def locate_llama_server(repo_root: Path) -> Path | None:
+    """Probe known locations for llama-server (.exe). Returns first hit or None."""
+    parent = repo_root.parent
+    candidates = [
+        parent / "llama.cpp" / "build" / "bin" / "Release" / "llama-server.exe",
+        parent / "llamacpp-bin" / "llama-server.exe",
+    ]
+    for c in candidates:
+        if c.is_file():
+            return c
+    for name in ("llama-server.exe", "llama-server"):
+        found = shutil.which(name)
+        if found:
+            return Path(found)
+    return None

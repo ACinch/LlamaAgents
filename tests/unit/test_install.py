@@ -125,3 +125,60 @@ def test_detect_vram_returns_none_on_garbage_output(monkeypatch):
         )
     monkeypatch.setattr(subprocess, "run", fake_run)
     assert detect_vram_gb() is None
+
+
+import shutil
+from pathlib import Path
+
+from llama_agents.install import locate_llama_server
+
+
+def test_locate_finds_llama_cpp_build_sibling(tmp_path: Path):
+    repo = tmp_path / "llama-agents"
+    repo.mkdir()
+    target = tmp_path / "llama.cpp" / "build" / "bin" / "Release" / "llama-server.exe"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"\0")
+    assert locate_llama_server(repo) == target
+
+
+def test_locate_falls_back_to_llamacpp_bin_sibling(tmp_path: Path):
+    repo = tmp_path / "llama-agents"
+    repo.mkdir()
+    target = tmp_path / "llamacpp-bin" / "llama-server.exe"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"\0")
+    assert locate_llama_server(repo) == target
+
+
+def test_locate_uses_path_lookup_when_no_sibling(tmp_path: Path, monkeypatch):
+    repo = tmp_path / "llama-agents"
+    repo.mkdir()
+    fake_path_exe = tmp_path / "fake-on-path" / "llama-server"
+    fake_path_exe.parent.mkdir()
+    fake_path_exe.write_bytes(b"\0")
+    def fake_which(name):
+        if name in ("llama-server.exe", "llama-server"):
+            return str(fake_path_exe)
+        return None
+    monkeypatch.setattr(shutil, "which", fake_which)
+    assert locate_llama_server(repo) == fake_path_exe
+
+
+def test_locate_returns_none_when_nothing_found(tmp_path: Path, monkeypatch):
+    repo = tmp_path / "llama-agents"
+    repo.mkdir()
+    monkeypatch.setattr(shutil, "which", lambda *_: None)
+    assert locate_llama_server(repo) is None
+
+
+def test_locate_prefers_build_release_over_llamacpp_bin(tmp_path: Path):
+    repo = tmp_path / "llama-agents"
+    repo.mkdir()
+    a = tmp_path / "llama.cpp" / "build" / "bin" / "Release" / "llama-server.exe"
+    b = tmp_path / "llamacpp-bin" / "llama-server.exe"
+    a.parent.mkdir(parents=True)
+    a.write_bytes(b"\0")
+    b.parent.mkdir(parents=True)
+    b.write_bytes(b"\0")
+    assert locate_llama_server(repo) == a
