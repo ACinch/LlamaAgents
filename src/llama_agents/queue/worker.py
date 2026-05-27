@@ -119,9 +119,9 @@ class JobQueueWorker:
                         await asyncio.wait_for(self._stop.wait(), timeout=delay)
                     except asyncio.TimeoutError:
                         pass
-                    if self._stop.is_set():
-                        # Shutting down — leave file in processing/ for sweep.
-                        return
+                if self._stop.is_set():
+                    # Shutting down — leave file in processing/ for sweep.
+                    return
                 attempt += 1
                 continue
             await self._finalize(path, result, attempt=attempt)
