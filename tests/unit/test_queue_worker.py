@@ -7,7 +7,7 @@ import pytest
 
 from llama_agents.agent import Agent
 from llama_agents.config import QueueConfig
-from llama_agents.llama_client import ChatResponse
+from llama_agents.llama_client import ChatResponse, ToolCall
 from llama_agents.queue.paths import ensure_dirs
 from llama_agents.queue.worker import JobQueueWorker
 from llama_agents.tools.registry import ToolRegistry
@@ -237,3 +237,41 @@ async def test_infra_error_terminates_after_max_retries(tmp_path):
     err = (tmp_path / "failed" / "dead.error.txt").read_text()
     assert "attempts: 2" in err  # initial + 1 retry
     assert "LlamaUnreachable" in err
+
+
+class _ToolLoopClient:
+    """Forces an infinite tool-call loop so max_iterations triggers."""
+
+    async def chat(self, **_):
+        return ChatResponse(
+            content=None,
+            tool_calls=[ToolCall(id="x", name="nonexistent", arguments={})],
+        )
+
+
+@pytest.mark.asyncio
+async def test_max_iterations_counts_as_success(queue_cfg, tmp_path):
+    ensure_dirs(queue_cfg.root)
+    (tmp_path / "inbox" / "loop.md").write_text("loop forever")
+
+    rt = _StubRuntime(lambda: _ToolLoopClient())
+    worker = JobQueueWorker(rt, queue_cfg)
+    task = asyncio.create_task(worker.run())
+    try:
+        ok = await _wait_until(lambda: (tmp_path / "done" / "loop.md").exists())
+        assert ok
+    finally:
+        await worker.drain(timeout=1.0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    assert (tmp_path / "done" / "loop.md").read_text() == "[no final answer]"
+    types = [
+        json.loads(l)["type"]
+        for l in (tmp_path / "done" / "loop.events.jsonl")
+        .read_text().splitlines()
+    ]
+    assert "Done" in types
