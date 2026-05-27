@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Protocol
+from typing import Any, AsyncIterator, Callable, Protocol
 
 from .errors import LlamaAgentsError
 from .events import (
@@ -17,6 +17,7 @@ from .events import (
     ToolCallStart,
 )
 from .llama_client import ChatResponse
+from .memory.store import InertMemoryStore, MemoryStore
 from .tools.registry import ToolRegistry
 
 
@@ -61,10 +62,15 @@ class Agent:
         *,
         client: _ClientLike,
         registry: ToolRegistry,
+        memory: "MemoryStore | InertMemoryStore | None" = None,
+        on_run_id: "Callable[[str | None], None] | None" = None,
     ) -> None:
         self._client = client
         self._registry = registry
+        self._memory = memory or InertMemoryStore()
+        self._on_run_id = on_run_id
         self._cancel = asyncio.Event()
+        self._run_id: str | None = None
         self.messages: list[dict[str, Any]] = []
 
     def cancel(self) -> None:
@@ -73,70 +79,80 @@ class Agent:
     async def run(
         self, user_prompt: str, opts: AgentRunOptions
     ) -> AsyncIterator[Event]:
-        effective_prompt = user_prompt
-        if self._should_plan(opts):
-            async for ev in self._plan_and_review(user_prompt, opts):
-                yield ev
-                if isinstance(ev, PlanAccepted):
-                    effective_prompt = (
-                        "APPROVED PLAN (already reviewed — execute it; do not "
-                        "re-plan):\n"
-                        f"{ev.plan}\n\n"
-                        "ORIGINAL TASK:\n"
-                        f"{user_prompt}"
+        import uuid
+        self._run_id = uuid.uuid4().hex[:24]
+        self._memory.start_run(self._run_id)
+        if self._on_run_id is not None:
+            self._on_run_id(self._run_id)
+        try:
+            effective_prompt = user_prompt
+            if self._should_plan(opts):
+                async for ev in self._plan_and_review(user_prompt, opts):
+                    yield ev
+                    if isinstance(ev, PlanAccepted):
+                        effective_prompt = (
+                            "APPROVED PLAN (already reviewed — execute it; do not "
+                            "re-plan):\n"
+                            f"{ev.plan}\n\n"
+                            "ORIGINAL TASK:\n"
+                            f"{user_prompt}"
+                        )
+
+            self.messages = [
+                {"role": "system", "content": opts.system_prompt},
+                {"role": "user", "content": effective_prompt},
+            ]
+            for _ in range(opts.max_iterations):
+                if self._cancel.is_set():
+                    yield Done(reason="cancelled")
+                    return
+
+                try:
+                    resp = await self._client.chat(
+                        messages=self.messages,
+                        tools=self._registry.schemas(),
+                        temperature=opts.temperature,
+                        reasoning_budget_tokens=opts.reasoning_budget_tokens,
+                    )
+                except LlamaAgentsError as e:
+                    yield LoopError(error_type=type(e).__name__, message=str(e))
+                    yield Done(reason="error")
+                    return
+
+                self.messages.append(
+                    resp.raw_message
+                    or {"role": "assistant", "content": resp.content}
+                )
+
+                if not resp.tool_calls:
+                    if resp.content:
+                        yield AssistantChunk(text=resp.content)
+                    yield Done(reason="finished", final_message=resp.content)
+                    return
+
+                for call in resp.tool_calls:
+                    yield ToolCallStart(
+                        call_id=call.id, name=call.name, arguments=call.arguments
+                    )
+                    try:
+                        result = await self._registry.invoke(call.name, call.arguments)
+                        ok, content = True, result
+                    except Exception as e:  # noqa: BLE001 — feed all tool errors back
+                        ok, content = False, f"{type(e).__name__}: {e}"
+                    yield ToolCallResult(call_id=call.id, ok=ok, content=content)
+                    self.messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call.id,
+                            "content": _as_tool_text(ok, content),
+                        }
                     )
 
-        self.messages = [
-            {"role": "system", "content": opts.system_prompt},
-            {"role": "user", "content": effective_prompt},
-        ]
-        for _ in range(opts.max_iterations):
-            if self._cancel.is_set():
-                yield Done(reason="cancelled")
-                return
-
-            try:
-                resp = await self._client.chat(
-                    messages=self.messages,
-                    tools=self._registry.schemas(),
-                    temperature=opts.temperature,
-                    reasoning_budget_tokens=opts.reasoning_budget_tokens,
-                )
-            except LlamaAgentsError as e:
-                yield LoopError(error_type=type(e).__name__, message=str(e))
-                yield Done(reason="error")
-                return
-
-            self.messages.append(
-                resp.raw_message
-                or {"role": "assistant", "content": resp.content}
-            )
-
-            if not resp.tool_calls:
-                if resp.content:
-                    yield AssistantChunk(text=resp.content)
-                yield Done(reason="finished", final_message=resp.content)
-                return
-
-            for call in resp.tool_calls:
-                yield ToolCallStart(
-                    call_id=call.id, name=call.name, arguments=call.arguments
-                )
-                try:
-                    result = await self._registry.invoke(call.name, call.arguments)
-                    ok, content = True, result
-                except Exception as e:  # noqa: BLE001 — feed all tool errors back
-                    ok, content = False, f"{type(e).__name__}: {e}"
-                yield ToolCallResult(call_id=call.id, ok=ok, content=content)
-                self.messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "content": _as_tool_text(ok, content),
-                    }
-                )
-
-        yield Done(reason="max_iterations")
+            yield Done(reason="max_iterations")
+        finally:
+            await self._memory.end_run(self._run_id)
+            if self._on_run_id is not None:
+                self._on_run_id(None)
 
     def _should_plan(self, opts: AgentRunOptions) -> bool:
         if opts.skip_planning:
