@@ -10,6 +10,7 @@ from .events import (
     Done,
     Event,
     LoopError,
+    MemoryEvicted,
     PlanAccepted,
     PlanProposed,
     PlanReviewed,
@@ -56,6 +57,9 @@ class AgentRunOptions:
     most recent plan is used as-is."""
     plan_recall_k: int = 3
     plan_recall_threshold: float = 0.5
+    evict_threshold_pct: int = 70
+    evict_tool_result_min_chars: int = 4000
+    ctx_size_for_eviction: int = 65536  # in tokens
 
 
 class Agent:
@@ -150,11 +154,54 @@ class Agent:
                         }
                     )
 
+                async for ev in self._maybe_evict(opts):
+                    yield ev
+
             yield Done(reason="max_iterations")
         finally:
             await self._memory.end_run(self._run_id)
             if self._on_run_id is not None:
                 self._on_run_id(None)
+
+    _EST_CHARS_PER_TOKEN: float = 3.5
+
+    async def _maybe_evict(self, opts: "AgentRunOptions"):
+        """Async generator — yields MemoryEvicted events when threshold crossed."""
+        budget_tokens = opts.ctx_size_for_eviction * (opts.evict_threshold_pct / 100.0)
+        est = sum(len(_msg_str(m)) for m in self.messages) / self._EST_CHARS_PER_TOKEN
+        if est < budget_tokens:
+            return
+        last_preserved = max(0, len(self.messages) - 4)
+        for i in range(last_preserved):
+            msg = self.messages[i]
+            if msg.get("role") != "tool":
+                continue
+            body = msg.get("content") or ""
+            if not isinstance(body, str) or len(body) < opts.evict_tool_result_min_chars:
+                continue
+            try:
+                blob_id = await self._memory.store_blob(
+                    kind="evicted_tool", scope="run", run_id=self._run_id,
+                    title=f"tool result @ msg {i}",
+                    body=body,
+                    metadata={"tool_call_id": msg.get("tool_call_id")},
+                )
+            except Exception as e:  # noqa: BLE001
+                import sys
+                print(f"[memory] eviction store failed: {e}", file=sys.stderr)
+                continue
+            freed = len(body)
+            stub = (
+                f"[evicted to memory — use memory_recall("
+                f"handle=\"{blob_id}\", query=...) to retrieve. "
+                f"Original size: {freed} chars.]"
+            )
+            msg["content"] = stub
+            yield MemoryEvicted(blob_id=blob_id, turn=i,
+                                bytes_freed=freed - len(stub))
+            est -= (freed - len(stub)) / self._EST_CHARS_PER_TOKEN
+            if est < opts.ctx_size_for_eviction * 0.5:
+                break
 
     def _should_plan(self, opts: AgentRunOptions) -> bool:
         if opts.skip_planning:
@@ -278,6 +325,13 @@ class Agent:
             import sys
             print(f"[memory] plan store failed: {e}", file=sys.stderr)
         yield PlanAccepted(plan=last_plan, attempts=opts.max_planning_iterations)
+
+
+def _msg_str(m: dict) -> str:
+    c = m.get("content")
+    if isinstance(c, str):
+        return c
+    return _json_dump(c)
 
 
 def _as_tool_text(ok: bool, content: Any) -> str:
