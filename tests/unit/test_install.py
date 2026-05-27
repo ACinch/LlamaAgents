@@ -386,3 +386,58 @@ def test_render_config_toml_marks_queue_disabled(tmp_path: Path):
     text = render_config_toml(_sample_values(tmp_path))
     data = tomllib.loads(text)
     assert data["queue"]["enabled"] is False
+
+
+import hashlib
+import zipfile
+from io import BytesIO
+
+from llama_agents.install import (
+    LLAMA_CPP_RELEASE_SHA256,
+    LLAMA_CPP_RELEASE_URL,
+    download_llama_cpp,
+)
+
+
+def _make_zip_with_server(payload: bytes = b"FAKE_EXE") -> bytes:
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("llama-server.exe", payload)
+        zf.writestr("ggml.dll", b"FAKE_DLL")
+    return buf.getvalue()
+
+
+def test_download_llama_cpp_writes_server_bin(tmp_path: Path, monkeypatch):
+    blob = _make_zip_with_server()
+    captured_url = []
+
+    def fake_urlopen(url, timeout=None):
+        captured_url.append(url)
+        from io import BytesIO
+        return BytesIO(blob)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        "llama_agents.install.LLAMA_CPP_RELEASE_SHA256",
+        hashlib.sha256(blob).hexdigest(),
+    )
+    result = download_llama_cpp(tmp_path)
+    assert result == tmp_path / "llama-server.exe"
+    assert result.is_file()
+    assert result.read_bytes() == b"FAKE_EXE"
+    assert (tmp_path / "ggml.dll").is_file()
+    assert captured_url == [LLAMA_CPP_RELEASE_URL]
+
+
+def test_download_llama_cpp_raises_on_sha_mismatch(tmp_path: Path, monkeypatch):
+    blob = _make_zip_with_server()
+    from io import BytesIO
+    monkeypatch.setattr(
+        "urllib.request.urlopen", lambda url, timeout=None: BytesIO(blob)
+    )
+    monkeypatch.setattr(
+        "llama_agents.install.LLAMA_CPP_RELEASE_SHA256",
+        "0" * 64,  # deliberately wrong
+    )
+    with pytest.raises(RuntimeError, match="sha256 mismatch"):
+        download_llama_cpp(tmp_path)

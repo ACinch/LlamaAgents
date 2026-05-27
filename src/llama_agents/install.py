@@ -339,3 +339,40 @@ def render_config_toml(values: dict) -> str:
         "# drain_timeout_seconds = 30.0\n"
         '# accepted_extensions = [".md", ".txt"]\n'
     )
+
+
+import hashlib
+import urllib.request
+import zipfile
+from io import BytesIO
+
+LLAMA_CPP_RELEASE_URL = (
+    "https://github.com/ggml-org/llama.cpp/releases/download/"
+    "b9370/llama-b9370-bin-win-cuda-12.4-x64.zip"
+)
+LLAMA_CPP_RELEASE_SHA256 = "01f960b644114955fbca4788aa3028d10165f6c43185c61176e8c4a54c58544b"
+
+
+def download_llama_cpp(dest_dir: Path) -> Path:
+    """Download the pinned llama.cpp Windows CUDA release into dest_dir.
+
+    Returns the path to the extracted llama-server.exe. Verifies sha256
+    before extracting; raises RuntimeError on mismatch.
+    """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    with urllib.request.urlopen(LLAMA_CPP_RELEASE_URL, timeout=120) as resp:
+        blob = resp.read()
+    actual = hashlib.sha256(blob).hexdigest()
+    if actual != LLAMA_CPP_RELEASE_SHA256:
+        raise RuntimeError(
+            f"sha256 mismatch for llama.cpp release: "
+            f"expected {LLAMA_CPP_RELEASE_SHA256}, got {actual}"
+        )
+    with zipfile.ZipFile(BytesIO(blob)) as zf:
+        zf.extractall(dest_dir)
+    server = dest_dir / "llama-server.exe"
+    if not server.is_file():
+        raise RuntimeError(
+            f"downloaded zip did not contain llama-server.exe at {server}"
+        )
+    return server
