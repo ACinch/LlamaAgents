@@ -12,6 +12,8 @@ dependencies = [
     "typer>=0.12",
     "rich>=13.7",
     "sse-starlette>=2.1",
+    "fastembed>=0.4",
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
