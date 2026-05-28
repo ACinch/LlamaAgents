@@ -115,3 +115,16 @@ async def test_api_jobs_unknown_status_returns_404(cfg, config_path):
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             r = await ac.get("/api/jobs/elsewhere")
             assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_dashboard_wires_htmx_polling_for_each_bucket(cfg, config_path):
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.get("/")
+            assert r.status_code == 200
+            for status in ("inbox", "processing", "done", "failed"):
+                assert f'hx-get="/api/jobs/{status}"' in r.text
+            assert 'hx-trigger="load, every 2s"' in r.text
