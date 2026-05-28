@@ -373,6 +373,9 @@ class Agent:
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
+            if self._cancel.is_set():
+                return
+
             # If EVERY reviewer raised, fail the planning phase like today.
             if all(isinstance(r, Exception) for r in results):
                 first = next(r for r in results if isinstance(r, Exception))

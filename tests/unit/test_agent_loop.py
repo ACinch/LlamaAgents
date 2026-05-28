@@ -471,3 +471,39 @@ async def test_all_reviewers_exception_emits_loop_error_and_no_plan_accepted():
     assert len(errors) == 1
     assert errors[0].error_type == "LlamaUnreachable"
     assert len(accepted) == 0
+
+
+class _SlowReviewerClient:
+    """First call returns the planner response immediately; subsequent calls
+    sleep so a cancel() can fire while they're in flight."""
+
+    def __init__(self, planner_response, delay: float = 0.5):
+        self._planner = planner_response
+        self._delay = delay
+        self._called_planner = False
+        self.calls: list[dict[str, Any]] = []
+
+    async def chat(self, *, messages, tools, temperature=0.2, reasoning_budget_tokens=None):
+        self.calls.append({"messages": list(messages), "tools": tools})
+        if not self._called_planner:
+            self._called_planner = True
+            return self._planner
+        await asyncio.sleep(self._delay)
+        return ChatResponse(content="ACCEPT")
+
+
+async def test_cancellation_mid_review_returns_without_plan_accepted():
+    client = _SlowReviewerClient(
+        planner_response=ChatResponse(content="plan"),
+        delay=0.3,
+    )
+    agent = Agent(client=client, registry=_orchestrator_registry())
+    # Schedule a cancel while reviewers are sleeping.
+    async def _runner():
+        await asyncio.sleep(0.1)
+        agent.cancel()
+    cancel_task = asyncio.create_task(_runner())
+    events = await _collect(agent.run("orchestrate", AgentRunOptions(max_iterations=3)))
+    await cancel_task
+    accepted = [e for e in events if isinstance(e, PlanAccepted)]
+    assert len(accepted) == 0
