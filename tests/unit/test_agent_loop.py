@@ -10,6 +10,7 @@ from llama_agents.events import (
     PlanAccepted,
     PlanProposed,
     PlanReviewed,
+    ReviewerVerdict,
     ToolCallResult,
     ToolCallStart,
 )
@@ -219,3 +220,60 @@ def test_agent_run_options_has_reviewer_defaults():
     # Backwards compat: existing fields untouched
     assert opts.max_planning_iterations == 3
     assert opts.max_iterations == 20
+
+
+def test_normalize_verdict_accepts_simple_accept():
+    from llama_agents.agent import _normalize_verdict
+    accepted, feedback = _normalize_verdict("ACCEPT")
+    assert accepted is True
+    assert feedback == ""
+
+
+def test_normalize_verdict_accepts_with_checklist_preamble():
+    from llama_agents.agent import _normalize_verdict
+    raw = (
+        "Tool validity: PASS\n"
+        "Scope match: PASS\n"
+        "Context safety: PASS\n"
+        "Specificity: PASS\n"
+        "Executability: PASS\n"
+        "\n"
+        "ACCEPT"
+    )
+    accepted, feedback = _normalize_verdict(raw)
+    assert accepted is True
+
+
+def test_normalize_verdict_rejects_with_reason():
+    from llama_agents.agent import _normalize_verdict
+    raw = "Tool validity: FAIL — step 3 names rag_query, no such tool.\nREJECT: step 3 names a non-existent tool"
+    accepted, feedback = _normalize_verdict(raw)
+    assert accepted is False
+    assert "step 3" in feedback
+
+
+def test_normalize_verdict_handles_lowercase():
+    from llama_agents.agent import _normalize_verdict
+    accepted, feedback = _normalize_verdict("accept")
+    assert accepted is True
+
+
+def test_normalize_verdict_malformed_counts_as_reject_with_truncated_raw():
+    from llama_agents.agent import _normalize_verdict
+    raw = "the plan seems okay i guess " * 50  # no ACCEPT/REJECT prefix
+    accepted, feedback = _normalize_verdict(raw)
+    assert accepted is False
+    assert len(feedback) <= 500
+    assert "the plan seems okay" in feedback
+
+
+def test_normalize_verdict_empty_string_rejects():
+    from llama_agents.agent import _normalize_verdict
+    accepted, feedback = _normalize_verdict("")
+    assert accepted is False
+
+
+def test_normalize_verdict_trailing_whitespace_stripped():
+    from llama_agents.agent import _normalize_verdict
+    accepted, feedback = _normalize_verdict("ACCEPT\n\n  \n")
+    assert accepted is True

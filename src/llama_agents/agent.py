@@ -16,6 +16,7 @@ from .events import (
     PlanAccepted,
     PlanProposed,
     PlanReviewed,
+    ReviewerVerdict,
     ToolCallResult,
     ToolCallStart,
 )
@@ -31,6 +32,84 @@ def get_active_run_id() -> str | None:
 from .llama_client import ChatResponse
 from .memory.store import InertMemoryStore, MemoryStore
 from .tools.registry import ToolRegistry
+
+
+_REVIEWER_SYSTEM_PROMPT = (
+    "You are an independent reviewer. You did NOT write the plan you are "
+    "about to evaluate. Treat it skeptically.\n"
+    "\n"
+    "Score the plan against this five-item checklist. For each item write "
+    "PASS / FAIL / SKIP followed by one sentence of justification.\n"
+    "\n"
+    "1. Tool validity — every step names a tool from the provided list.\n"
+    "2. Scope match — the plan accomplishes the user's stated goal.\n"
+    "3. Context safety — no obvious context-window blowups (broad globs "
+    "over directories like .venv or node_modules; chained reads of very "
+    "large files).\n"
+    "4. Specificity — no vague hand-waves (e.g. \"use shell to figure "
+    "out the project\").\n"
+    "5. Executability — a worker following the steps verbatim could "
+    "actually run them, in order, without filling gaps.\n"
+    "\n"
+    "After the checklist, on its own final line, output EXACTLY one of:\n"
+    "  ACCEPT\n"
+    "  REJECT: <one sentence describing the single most important fix>"
+)
+
+
+def _normalize_verdict(raw: str) -> tuple[bool, str]:
+    """Parse a reviewer's response into (accepted, feedback).
+
+    Permissive but conservative: a response is ACCEPT only if its
+    final non-empty line, stripped, starts with 'ACCEPT' (case-insensitive).
+    Anything else is REJECT with the relevant feedback extracted.
+    """
+    text = (raw or "").rstrip()
+    if not text:
+        return False, ""
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return False, ""
+    last = lines[-1].strip()
+    if last.upper().startswith("ACCEPT"):
+        return True, ""
+    if last.upper().startswith("REJECT"):
+        # Strip the "REJECT:" prefix if present.
+        if ":" in last:
+            return False, last.split(":", 1)[1].strip()
+        return False, last
+    # Malformed: no recognized verdict marker. Use raw output as feedback,
+    # truncated to 500 chars.
+    truncated = text[:500]
+    return False, truncated
+
+
+async def _one_reviewer(
+    client: "_ClientLike",
+    *,
+    user_prompt: str,
+    plan: str,
+    reviewer_system: str,
+    temperature: float,
+    reasoning_budget_tokens: "int | None",
+) -> tuple[bool, str]:
+    """Run one reviewer pass. Returns (accepted, feedback)."""
+    review_msgs = [
+        {"role": "system", "content": reviewer_system},
+        {
+            "role": "user",
+            "content": (
+                "TASK:\n" + user_prompt + "\n\nPROPOSED PLAN:\n" + plan
+            ),
+        },
+    ]
+    resp = await client.chat(
+        messages=review_msgs,
+        tools=[],
+        temperature=temperature,
+        reasoning_budget_tokens=reasoning_budget_tokens,
+    )
+    return _normalize_verdict(resp.content or "")
 
 
 class _ClientLike(Protocol):
@@ -242,16 +321,7 @@ class Agent:
             "the step is executed. Available tools: " + tool_names + ". "
             "Output ONLY the numbered list — no preamble, no explanation."
         )
-        reviewer_system = (
-            "You are a strict plan reviewer. Reply with EXACTLY one of:\n"
-            "  ACCEPT\n"
-            "  REJECT: <one short sentence explaining the most important "
-            "problem>\n"
-            "Reject if any step references a tool that does not exist, the "
-            "plan would obviously exceed the context window (e.g. asking "
-            "fs_list_files for a base that contains .venv), the plan skips "
-            "the task's stated goal, or steps are vague hand-waves."
-        )
+        reviewer_system = _REVIEWER_SYSTEM_PROMPT
 
         prior = []
         try:
@@ -290,28 +360,21 @@ class Agent:
             last_plan = (plan_resp.content or "").strip()
             yield PlanProposed(attempt=attempt, plan=last_plan)
 
-            review_msgs = [
-                {"role": "system", "content": reviewer_system},
-                {
-                    "role": "user",
-                    "content": (
-                        "TASK:\n" + user_prompt + "\n\nPROPOSED PLAN:\n" + last_plan
-                    ),
-                },
-            ]
             try:
-                rev_resp = await self._client.chat(
-                    messages=review_msgs,
-                    tools=[],
-                    temperature=0.0,
+                accepted, feedback = await _one_reviewer(
+                    self._client,
+                    user_prompt=user_prompt,
+                    plan=last_plan,
+                    reviewer_system=reviewer_system,
+                    temperature=opts.reviewer_temperature,
                     reasoning_budget_tokens=opts.reasoning_budget_tokens,
                 )
             except LlamaAgentsError as e:
                 yield LoopError(error_type=type(e).__name__, message=str(e))
                 return
-            verdict = (rev_resp.content or "").strip()
-            accepted = verdict.upper().startswith("ACCEPT")
-            yield PlanReviewed(attempt=attempt, accepted=accepted, feedback=verdict)
+            yield ReviewerVerdict(attempt=attempt, reviewer_idx=0,
+                                  accepted=accepted, feedback=feedback)
+            yield PlanReviewed(attempt=attempt, accepted=accepted, feedback=feedback)
             if accepted:
                 blob_id = ""
                 try:
@@ -332,7 +395,7 @@ class Agent:
                 {
                     "role": "user",
                     "content": (
-                        f"Reviewer rejected: {verdict}\n"
+                        f"Reviewer rejected: {feedback}\n"
                         "Revise the plan addressing the rejection. Output the "
                         "full revised numbered list only."
                     ),

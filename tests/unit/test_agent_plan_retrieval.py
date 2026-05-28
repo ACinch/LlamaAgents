@@ -27,7 +27,7 @@ class _ScriptedClient:
         sys = messages[0]["content"] if messages else ""
         if "planning agent" in sys:
             self.last_planner_messages = list(messages)
-        elif "plan reviewer" in sys:
+        elif "reviewer" in sys:
             self.last_reviewer_messages = list(messages)
         return self._responses[idx]
 
