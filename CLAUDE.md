@@ -92,6 +92,7 @@ shipping — see the table in `README.md`.
 | `queue/paths.py` | Atomic move + sweep helpers for queue folders. |
 | `queue/worker.py` | `JobQueueWorker`: polls inbox/, runs jobs, writes outputs. |
 | `install.py` | `llamactl init` wizard: VRAM detect, model pick, config render. |
+| `web/routes.py` | FastAPI routes + Jinja2 templates for the dashboard / job / config UI. |
 
 ### Agent.run() shape
 

@@ -55,6 +55,14 @@ uv run llamactl chat "Summarize what this repo does."
 uv run llamactl serve
 ```
 
+## Web UI
+
+When `llamactl serve` is running, open `http://127.0.0.1:9000/` in a
+browser. The UI lets you submit jobs to the queue (file upload or
+pasted text), watch them progress, click into a finished job to see
+its event timeline, and view the active `config.toml`. See
+`docs/web.md` for details.
+
 ## Configuration
 
 Edit `config.toml`. The defaults target an RTX 4090 / 64 GB / Gen4 NVMe
