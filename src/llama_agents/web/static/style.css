@@ -198,11 +198,17 @@ main { max-width: 1100px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
 
 .dropzone {
     position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    width: 100%;
+    min-height: 180px;
+    padding: 2rem 1rem;
     border: 1.5px dashed #2a3a40;
     border-radius: var(--radius);
     background: rgba(255,255,255,0.01);
-    padding: 2rem 1rem;
-    text-align: center;
     cursor: pointer;
     transition: background .15s, border-color .15s;
     margin-bottom: 1rem;
@@ -214,11 +220,17 @@ main { max-width: 1100px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
 .dropzone input[type="file"] {
     position: absolute;
     inset: 0;
+    width: 100%;
+    height: 100%;
     opacity: 0;
     cursor: pointer;
     border: none;
     padding: 0;
+    margin: 0;
+    background: transparent;
+    z-index: 1;
 }
+.dropzone > *:not(input) { position: relative; z-index: 2; pointer-events: none; }
 .dropzone .dz-icon {
     width: 44px; height: 44px;
     border-radius: 50%;
