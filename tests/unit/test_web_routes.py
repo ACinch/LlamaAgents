@@ -413,3 +413,11 @@ async def test_dashboard_omits_preset_picker_when_no_examples(cfg, config_path):
             r = await ac.get("/")
             assert r.status_code == 200
             assert "preset-picker" not in r.text
+
+
+def test_event_style_includes_reviewer_verdict():
+    from llama_agents.web.routes import _EVENT_STYLE
+    assert "ReviewerVerdict" in _EVENT_STYLE
+    color, summary_key = _EVENT_STYLE["ReviewerVerdict"]
+    assert color == "teal"
+    assert summary_key == "accepted"

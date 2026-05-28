@@ -78,6 +78,22 @@ def test_serialize_memory_events():
     assert data["bytes_freed"] == 512
 
 
+def test_http_serialize_reviewer_verdict():
+    import json as _j
+    from llama_agents.events import ReviewerVerdict
+    from llama_agents.http_app import _serialize
+
+    ev = ReviewerVerdict(attempt=2, reviewer_idx=1, accepted=False,
+                         feedback="missing tool")
+    out = _serialize(ev)
+    assert out["event"] == "reviewer_verdict"
+    data = _j.loads(out["data"])
+    assert data["attempt"] == 2
+    assert data["reviewer_idx"] == 1
+    assert data["accepted"] is False
+    assert data["feedback"] == "missing tool"
+
+
 @pytest.mark.asyncio
 async def test_lifespan_starts_queue_worker_when_enabled(tmp_path: Path):
     from asgi_lifespan import LifespanManager

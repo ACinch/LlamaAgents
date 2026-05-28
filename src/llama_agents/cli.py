@@ -16,7 +16,10 @@ for _stream in (sys.stdout, sys.stderr):
 
 from .agent import AgentRunOptions
 from .config import load_config
-from .events import AssistantChunk, Done, LoopError, MemoryEvicted, MemoryStored, ToolCallResult, ToolCallStart
+from .events import (
+    AssistantChunk, Done, LoopError, MemoryEvicted, MemoryStored,
+    ReviewerVerdict, ToolCallResult, ToolCallStart,
+)
 from .runtime import Runtime
 
 
@@ -49,6 +52,12 @@ def _render_event(ev: object) -> None:
     elif isinstance(ev, MemoryEvicted):
         kb = ev.bytes_freed / 1024
         print(f"  ◦ evicted tool result → -{kb:.1f} KB (mem:{ev.blob_id[:8]})", file=sys.stderr)
+    elif isinstance(ev, ReviewerVerdict):
+        marker = "✓" if ev.accepted else "✗"
+        excerpt = ev.feedback[:80]
+        console.print(
+            f"[dim]  {marker} reviewer {ev.reviewer_idx}: {excerpt}[/dim]"
+        )
 
 
 @app.command()

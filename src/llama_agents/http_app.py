@@ -13,7 +13,10 @@ from sse_starlette.sse import EventSourceResponse
 
 from .agent import AgentRunOptions
 from .config import Config
-from .events import AssistantChunk, Done, LoopError, MemoryEvicted, MemoryStored, ToolCallResult, ToolCallStart
+from .events import (
+    AssistantChunk, Done, LoopError, MemoryEvicted, MemoryStored,
+    ReviewerVerdict, ToolCallResult, ToolCallStart,
+)
 from .queue.worker import JobQueueWorker
 from .runtime import Runtime, _resolve_queue_root
 from .web.routes import register_routes
@@ -134,5 +137,15 @@ def _serialize(ev: Any) -> dict[str, str]:
             "data": json.dumps(
                 {"blob_id": ev.blob_id, "turn": ev.turn, "bytes_freed": ev.bytes_freed}
             ),
+        }
+    if isinstance(ev, ReviewerVerdict):
+        return {
+            "event": "reviewer_verdict",
+            "data": json.dumps({
+                "attempt": ev.attempt,
+                "reviewer_idx": ev.reviewer_idx,
+                "accepted": ev.accepted,
+                "feedback": ev.feedback,
+            }),
         }
     return {"event": "unknown", "data": "{}"}

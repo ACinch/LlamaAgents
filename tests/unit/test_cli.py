@@ -25,3 +25,19 @@ def test_cli_renders_memory_events(capsys):
     assert "mem:abcdef12" in captured.err
     assert "memory" in captured.err.lower() or "stored" in captured.err.lower()
     assert "evict" in captured.err.lower() or "-2.0 KB" in captured.err
+
+
+def test_cli_renders_reviewer_verdict():
+    from io import StringIO
+    from rich.console import Console
+    from llama_agents.cli import _render_event
+    from llama_agents.events import ReviewerVerdict
+    import llama_agents.cli as cli_mod
+
+    buf = StringIO()
+    cli_mod.console = Console(file=buf, force_terminal=False, no_color=True, width=200)
+    _render_event(ReviewerVerdict(attempt=1, reviewer_idx=2, accepted=True,
+                                  feedback=""))
+    text = buf.getvalue()
+    assert "reviewer 2" in text or "Reviewer 2" in text
+    assert "✓" in text

@@ -202,6 +202,7 @@ _EVENT_STYLE: dict[str, tuple[str, str | None]] = {
     "PlanProposed":     ("gray",   "attempt"),
     "PlanReviewed":     ("gray",   "accepted"),
     "PlanAccepted":     ("green",  "attempts"),
+    "ReviewerVerdict":  ("teal",   "accepted"),
     "ToolCallStart":    ("blue",   "name"),
     "ToolCallResult":   ("blue",   "ok"),
     "AssistantChunk":   ("violet", None),
