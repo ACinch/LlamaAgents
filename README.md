@@ -26,34 +26,52 @@ tools — driven through a CLI or an HTTP/SSE service.
   blocks so the model can't fill the context window in a single
   monologue.
 
+## Prerequisites
+
+| Required | What for |
+|---|---|
+| **Python 3.12+** | The package targets `>=3.12` (uses modern type unions, `tomllib`). |
+| **[`uv`](https://docs.astral.sh/uv/)** | Dependency + virtualenv management. All commands below assume `uv` is on `PATH`. On Windows it usually installs to `%USERPROFILE%\AppData\Roaming\Python\Python314\Scripts\uv.exe` — prepend that to `PATH` or invoke by full path. |
+| **NVIDIA GPU + CUDA 12.4+ drivers** | The agent runs `llama-server` locally with `-ngl 999` (offload all layers). CPU-only inference is technically possible but not tuned for. |
+| **A C/C++ runtime** | Needed to run the prebuilt `llama-server.exe`. On Windows that's the VC++ 2019+ redistributable; most systems already have it. |
+
+| Optional | Unlocks |
+|---|---|
+| **`llama.cpp` build** (or skip — `llamactl init` can download a pinned Windows-CUDA release) | The local inference server. If you already have `llama.cpp` cloned next to this repo at `../llama.cpp/build/bin/Release/llama-server.exe`, the wizard finds it automatically. |
+| **A GGUF model file** | A 30B-MoE Q4 fits 24 GB cards; smaller quants for 8–16 GB. The wizard offers three curated picks and downloads from HuggingFace via `huggingface_hub` (optional extra). |
+| **`huggingface_hub`** (`uv add huggingface_hub`) | Lets `llamactl init` download the recommended GGUF. Skip if you'll drop your own model into `./GGUF/`. |
+| **`nvidia-smi`** | Lets the wizard auto-detect VRAM and pick a model tier for you. Comes with NVIDIA drivers. |
+| **Node.js** | Only if you wire up the RAG MCP server in `.mcp.json` (see `docs/examples/marketing-suggestions-from-rag.md`). |
+| **A modern browser** | For the web UI (Chrome / Firefox / Edge). |
+
+> **Windows note:** Set `$env:PYTHONIOENCODING = "utf-8"` once per shell
+> before running `llamactl` commands. The rich-formatted output uses
+> glyphs that crash cp1252 when stdout is captured.
+
 ## Quickstart
 
-## First-time setup
-
-After installing dependencies, run:
-
-```
-uv run llamactl init
-```
-
-This interactive wizard detects your llama-server binary, recommends
-a GGUF model sized to your GPU, downloads it if needed, and writes a
-`config.toml`. See `docs/install.md` for details.
-
 ```powershell
-# install (uv lives at %USERPROFILE%\AppData\Roaming\Python\Python314\Scripts\uv.exe on Windows)
+# 1. install dependencies
 uv sync --extra dev
 
-# unit tests
-uv run pytest tests/unit -q
+# 2. interactive first-time setup — detects llama-server, recommends a
+#    GGUF for your GPU, optionally downloads it, writes config.toml
+uv run llamactl init
 
-# one-shot agent run (needs llama-server reachable or auto_spawn=true in config.toml)
+# 3a. one-shot agent run
 $env:PYTHONIOENCODING = "utf-8"
 uv run llamactl chat "Summarize what this repo does."
 
-# HTTP service
+# 3b. or: start the HTTP service (also exposes the web UI at :9000)
 uv run llamactl serve
+
+# anytime: run the unit suite
+uv run pytest tests/unit -q
 ```
+
+If you'd rather hand-edit `config.toml` instead of running the wizard,
+see [`docs/install.md`](docs/install.md) for the field-by-field
+description.
 
 ## Web UI
 
