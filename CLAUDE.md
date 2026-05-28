@@ -103,6 +103,7 @@ Every call to `agent.run(prompt, opts)`:
    - Calls the model as a planner → `PlanProposed(attempt, plan)` event.
    - Calls the model as a reviewer → `PlanReviewed(attempt, accepted,
      feedback)` event.
+   - The reviewer runs as **N parallel passes** (default 3, configurable via `AgentRunOptions.reviewer_count`) with an adversarial system prompt and a 5-item checklist. Verdict is by strict majority (`accepts > N // 2`). Each pass emits a `ReviewerVerdict` event in addition to the single per-attempt `PlanReviewed`.
    - If REJECT, feeds reviewer's feedback back to planner. Loops up to
      `opts.max_planning_iterations` (default 3).
    - On ACCEPT (or budget exhaustion) emits `PlanAccepted(plan,
@@ -118,7 +119,7 @@ Every call to `agent.run(prompt, opts)`:
    - Bounded by `opts.max_iterations` (default 20).
 
 Events surfaced to callers:
-`PlanProposed`, `PlanReviewed`, `PlanAccepted`, `ToolCallStart`,
+`PlanProposed`, `PlanReviewed`, `ReviewerVerdict`, `PlanAccepted`, `ToolCallStart`,
 `ToolCallResult`, `AssistantChunk`, `LoopError`, `Done`.
 
 ### Why the registry is cloned per agent
@@ -250,9 +251,6 @@ and then subagents fan out per domain.
   across runs; large subagent outputs and overflow tool results are
   offloaded to a local SQLite + fastembed store; `memory_recall` retrieves
   them. See `docs/memory.md`.
-- **Reviewer can confirm bad plans.** Self-review by the same model is
-  cheap but prone to confirmation bias. A reviewer-subagent variant is
-  on the table.
 - **Queue worker has no priority / cron / control API.** Re-queuing is
   a manual file move; status is "look at the folders". A future
   `/queue/*` HTTP surface can be built later if needed.
