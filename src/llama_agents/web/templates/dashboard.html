@@ -24,12 +24,15 @@
                 const data = JSON.parse(document.getElementById("presets-data").textContent);
                 const byId = Object.fromEntries(data.map(p => [p.id, p]));
                 const picker = document.getElementById("preset-picker");
-                const form = picker.closest("form");
-                const filename = form.querySelector('input[name="filename"]');
-                const body = form.querySelector('textarea[name="body"]');
+                // Resolve filename + textarea at change-time: at script-load
+                // time they are still being parsed (they appear AFTER this
+                // <script> in the document).
                 picker.addEventListener("change", function () {
                     const p = byId[picker.value];
                     if (!p) return;
+                    const form = picker.closest("form");
+                    const filename = form.querySelector('input[name="filename"]');
+                    const body = form.querySelector('textarea[name="body"]');
                     body.value = p.body;
                     if (!filename.value) filename.value = p.id + ".md";
                 });
