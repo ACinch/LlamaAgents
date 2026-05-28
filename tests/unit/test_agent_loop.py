@@ -507,3 +507,24 @@ async def test_cancellation_mid_review_returns_without_plan_accepted():
     await cancel_task
     accepted = [e for e in events if isinstance(e, PlanAccepted)]
     assert len(accepted) == 0
+
+
+async def test_reviewer_count_zero_yields_loop_error_no_crash():
+    """Regression: reviewer_count=0 used to crash via StopIteration. Now
+    surfaces a clean LoopError. (Main loop still runs after the planning
+    error and consumes one more ChatResponse.)"""
+    client = ScriptedClient([
+        ChatResponse(content="plan"),  # planner; 0 reviewer calls follow
+        ChatResponse(content="done"),  # main loop after LoopError
+    ])
+    agent = Agent(client=client, registry=_orchestrator_registry())
+    events = await _collect(agent.run(
+        "orchestrate",
+        AgentRunOptions(max_iterations=3, reviewer_count=0),
+    ))
+    errors = [e for e in events if isinstance(e, LoopError)]
+    accepted = [e for e in events if isinstance(e, PlanAccepted)]
+    assert len(errors) == 1
+    assert errors[0].error_type == "ValueError"
+    assert "reviewer_count" in errors[0].message
+    assert len(accepted) == 0

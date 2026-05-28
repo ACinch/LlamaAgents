@@ -376,10 +376,17 @@ class Agent:
             if self._cancel.is_set():
                 return
 
-            # If EVERY reviewer raised, fail the planning phase like today.
-            if all(isinstance(r, Exception) for r in results):
+            # If EVERY reviewer raised — or reviewer_count was misconfigured
+            # to 0 so we got no results at all — fail the planning phase.
+            if results and all(isinstance(r, Exception) for r in results):
                 first = next(r for r in results if isinstance(r, Exception))
                 yield LoopError(error_type=type(first).__name__, message=str(first))
+                return
+            if not results:
+                yield LoopError(
+                    error_type="ValueError",
+                    message=f"reviewer_count must be >= 1, got {opts.reviewer_count}",
+                )
                 return
 
             # Normalize exceptions into REJECT votes; otherwise unpack tuples.
