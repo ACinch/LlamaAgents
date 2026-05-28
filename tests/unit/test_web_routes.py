@@ -315,3 +315,33 @@ async def test_job_detail_rejects_path_traversal_in_name(cfg, config_path):
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             r = await ac.get("/jobs/done/..%2Fconfig.toml")
             assert r.status_code in (400, 404)
+
+
+@pytest.mark.asyncio
+async def test_config_view_returns_toml_content(cfg, config_path):
+    config_path.write_text(
+        '[llama]\nserver_url = "http://127.0.0.1:9999"\n', encoding="utf-8"
+    )
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.get("/config")
+            assert r.status_code == 200
+            assert "[llama]" in r.text
+            assert "127.0.0.1:9999" in r.text
+
+
+@pytest.mark.asyncio
+async def test_config_view_re_reads_file_per_request(cfg, config_path):
+    """Edit-in-place should surface without restart."""
+    config_path.write_text('[llama]\nserver_url = "first"\n', encoding="utf-8")
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r1 = await ac.get("/config")
+            assert "first" in r1.text
+            config_path.write_text('[llama]\nserver_url = "second"\n', encoding="utf-8")
+            r2 = await ac.get("/config")
+            assert "second" in r2.text

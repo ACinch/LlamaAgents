@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}llama-agents — config{% endblock %}
+{% block content %}
+<h1>config.toml</h1>
+<p class="muted">{{ path }}</p>
+<button onclick="navigator.clipboard.writeText(document.getElementById('cfg').innerText)">Copy</button>
+<pre id="cfg" class="config-toml">{{ content }}</pre>
+{% endblock %}

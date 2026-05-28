@@ -234,3 +234,14 @@ def register_routes(
                 "error": error_text,
             },
         )
+
+    @app.get("/config", response_class=HTMLResponse)
+    async def config_view(request: Request):
+        try:
+            content = config_path.read_text(encoding="utf-8")
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"cannot read config: {e}")
+        return templates.TemplateResponse(
+            request, "config.html",
+            {"path": str(config_path), "content": content},
+        )
