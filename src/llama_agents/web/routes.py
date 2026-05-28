@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import os
+import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -43,6 +46,21 @@ _VALID_STATUSES = ("inbox", "processing", "done", "failed")
 class _JobEntry:
     name: str
     mtime: float
+
+
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _validate_name(name: str, accepted_exts: list[str]) -> str | None:
+    """Return the validated name, or None if it fails validation."""
+    if not name:
+        return None
+    if not _SAFE_NAME.match(name):
+        return None
+    suffix = Path(name).suffix.lower()
+    if suffix not in accepted_exts:
+        return None
+    return name
 
 
 def _list_jobs(root: Path, status: str, *, limit: int | None = None) -> list[_JobEntry]:
@@ -90,3 +108,43 @@ def register_routes(
             request, "_partials/job_list.html",
             {"status": status, "jobs": rows},
         )
+
+    @app.post("/api/submit")
+    async def submit(
+        request: Request,
+        file: UploadFile | None = File(None),
+        filename: str | None = Form(None),
+        body: str | None = Form(None),
+    ):
+        accepted = list(cfg.queue.accepted_extensions)
+        if file is not None and file.filename:
+            name = _validate_name(file.filename, accepted)
+            content_bytes = await file.read()
+            if name is None:
+                return PlainTextResponse(
+                    f"invalid filename or extension: {file.filename!r}",
+                    status_code=400,
+                )
+            content = content_bytes.decode("utf-8", errors="replace")
+        else:
+            raw_name = (filename or "").strip() or f"task-{int(time.time())}.md"
+            name = _validate_name(raw_name, accepted)
+            if name is None:
+                return PlainTextResponse(
+                    f"invalid filename or extension: {raw_name!r}",
+                    status_code=400,
+                )
+            content = body or ""
+
+        inbox = Path(cfg.queue.root) / "inbox"
+        inbox.mkdir(parents=True, exist_ok=True)
+        target = inbox / name
+        if target.exists():
+            return PlainTextResponse(
+                f"{name} already exists in inbox; rename and retry",
+                status_code=400,
+            )
+        tmp = inbox / f".{name}.partial"
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(tmp, target)
+        return RedirectResponse(url="/", status_code=303)

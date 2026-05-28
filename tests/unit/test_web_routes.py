@@ -128,3 +128,94 @@ async def test_dashboard_wires_htmx_polling_for_each_bucket(cfg, config_path):
             for status in ("inbox", "processing", "done", "failed"):
                 assert f'hx-get="/api/jobs/{status}"' in r.text
             assert 'hx-trigger="load, every 2s"' in r.text
+
+
+@pytest.mark.asyncio
+async def test_submit_multipart_file_lands_in_inbox(cfg, config_path):
+    _seed_queue_dirs(cfg.queue.root)
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.post(
+                "/api/submit",
+                files={"file": ("hi.md", b"hello world", "text/markdown")},
+            )
+            assert r.status_code in (303, 200)
+    landed = cfg.queue.root / "inbox" / "hi.md"
+    assert landed.is_file()
+    assert landed.read_text(encoding="utf-8") == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_submit_textarea_lands_in_inbox(cfg, config_path):
+    _seed_queue_dirs(cfg.queue.root)
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.post(
+                "/api/submit",
+                data={"filename": "t.md", "body": "hello"},
+            )
+            assert r.status_code in (303, 200)
+    assert (cfg.queue.root / "inbox" / "t.md").read_text(encoding="utf-8") == "hello"
+
+
+@pytest.mark.asyncio
+async def test_submit_textarea_default_filename(cfg, config_path):
+    import re
+    _seed_queue_dirs(cfg.queue.root)
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            await ac.post("/api/submit", data={"filename": "", "body": "auto"})
+    matches = list((cfg.queue.root / "inbox").glob("task-*.md"))
+    assert len(matches) == 1
+    assert re.match(r"task-\d+\.md", matches[0].name)
+    assert matches[0].read_text(encoding="utf-8") == "auto"
+
+
+@pytest.mark.asyncio
+async def test_submit_rejects_bad_extension(cfg, config_path):
+    _seed_queue_dirs(cfg.queue.root)
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.post(
+                "/api/submit",
+                files={"file": ("bad.exe", b"NOPE", "application/octet-stream")},
+            )
+            assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_submit_rejects_path_traversal(cfg, config_path):
+    _seed_queue_dirs(cfg.queue.root)
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.post(
+                "/api/submit",
+                data={"filename": "../escape.md", "body": "nope"},
+            )
+            assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_submit_rejects_duplicate(cfg, config_path):
+    _seed_queue_dirs(cfg.queue.root)
+    (cfg.queue.root / "inbox" / "dupe.md").write_text("existing")
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.post(
+                "/api/submit",
+                data={"filename": "dupe.md", "body": "new"},
+            )
+            assert r.status_code == 400
+    assert (cfg.queue.root / "inbox" / "dupe.md").read_text(encoding="utf-8") == "existing"
