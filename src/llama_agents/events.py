@@ -71,3 +71,11 @@ class MemoryEvicted(Event):
     blob_id: str
     turn: int
     bytes_freed: int
+
+
+@dataclass
+class ReviewerVerdict(Event):
+    attempt: int
+    reviewer_idx: int   # 0-indexed within an attempt
+    accepted: bool
+    feedback: str

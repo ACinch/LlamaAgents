@@ -28,3 +28,15 @@ def test_memory_events_construct():
     e = MemoryEvicted(blob_id="01J", turn=3, bytes_freed=9000)
     assert isinstance(e, Event)
     assert e.bytes_freed == 9000
+
+
+def test_reviewer_verdict_constructs():
+    from llama_agents.events import Event, ReviewerVerdict
+
+    v = ReviewerVerdict(attempt=2, reviewer_idx=1, accepted=False,
+                        feedback="step 3 references a tool that does not exist")
+    assert isinstance(v, Event)
+    assert v.attempt == 2
+    assert v.reviewer_idx == 1
+    assert v.accepted is False
+    assert v.feedback.startswith("step 3")

@@ -208,3 +208,14 @@ async def test_cancellation_stops_loop():
     agent.cancel()  # pre-cancel
     events = await _collect(agent.run("go", AgentRunOptions(max_iterations=5)))
     assert isinstance(events[-1], Done) and events[-1].reason == "cancelled"
+
+
+def test_agent_run_options_has_reviewer_defaults():
+    from llama_agents.agent import AgentRunOptions
+
+    opts = AgentRunOptions()
+    assert opts.reviewer_count == 3
+    assert opts.reviewer_temperature == 0.5
+    # Backwards compat: existing fields untouched
+    assert opts.max_planning_iterations == 3
+    assert opts.max_iterations == 20

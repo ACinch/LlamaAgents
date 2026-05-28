@@ -66,6 +66,13 @@ class AgentRunOptions:
     max_planning_iterations: int = 3
     """Maximum plan-then-review cycles. After this many rejections the
     most recent plan is used as-is."""
+    reviewer_count: int = 3
+    """Number of independent reviewer calls per planning attempt. The
+    plan is accepted iff a strict majority (>count//2) vote ACCEPT.
+    Set to 1 to disable consensus (legacy single-reviewer behavior)."""
+    reviewer_temperature: float = 0.5
+    """Sampling temperature for reviewer calls. Higher than the planner
+    so reviewers have room to disagree with each other."""
     plan_recall_k: int = 3
     plan_recall_threshold: float = 0.5
     evict_threshold_pct: int = 70
