@@ -360,8 +360,8 @@ class Agent:
             last_plan = (plan_resp.content or "").strip()
             yield PlanProposed(attempt=attempt, plan=last_plan)
 
-            try:
-                accepted, feedback = await _one_reviewer(
+            tasks = [
+                _one_reviewer(
                     self._client,
                     user_prompt=user_prompt,
                     plan=last_plan,
@@ -369,12 +369,58 @@ class Agent:
                     temperature=opts.reviewer_temperature,
                     reasoning_budget_tokens=opts.reasoning_budget_tokens,
                 )
-            except LlamaAgentsError as e:
-                yield LoopError(error_type=type(e).__name__, message=str(e))
+                for _ in range(opts.reviewer_count)
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # If EVERY reviewer raised, fail the planning phase like today.
+            if all(isinstance(r, Exception) for r in results):
+                first = next(r for r in results if isinstance(r, Exception))
+                yield LoopError(error_type=type(first).__name__, message=str(first))
                 return
-            yield ReviewerVerdict(attempt=attempt, reviewer_idx=0,
-                                  accepted=accepted, feedback=feedback)
-            yield PlanReviewed(attempt=attempt, accepted=accepted, feedback=feedback)
+
+            # Normalize exceptions into REJECT votes; otherwise unpack tuples.
+            verdicts: list[tuple[bool, str]] = []
+            for r in results:
+                if isinstance(r, Exception):
+                    msg = f"{type(r).__name__}: {r}"[:500]
+                    verdicts.append((False, msg))
+                else:
+                    verdicts.append(r)
+
+            for i, (accepted_i, feedback_i) in enumerate(verdicts):
+                yield ReviewerVerdict(
+                    attempt=attempt, reviewer_idx=i,
+                    accepted=accepted_i, feedback=feedback_i,
+                )
+
+            # Strict majority.
+            accepts = sum(1 for v, _ in verdicts if v)
+            majority_accepted = accepts > opts.reviewer_count // 2
+
+            if majority_accepted:
+                feedback = ""
+            else:
+                # Dedupe rejection reasons (lowercase-strip equality)
+                seen: set[str] = set()
+                distinct: list[str] = []
+                for v, f in verdicts:
+                    if v:
+                        continue
+                    key = f.strip().lower()
+                    if key and key not in seen:
+                        seen.add(key)
+                        distinct.append(f.strip())
+                if len(distinct) <= 1:
+                    feedback = distinct[0] if distinct else ""
+                else:
+                    feedback = "Reviewers rejected:\n" + "\n".join(
+                        f"- {d}" for d in distinct
+                    )
+
+            yield PlanReviewed(attempt=attempt, accepted=majority_accepted,
+                               feedback=feedback)
+            accepted = majority_accepted
             if accepted:
                 blob_id = ""
                 try:

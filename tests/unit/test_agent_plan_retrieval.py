@@ -68,7 +68,8 @@ async def test_plan_retrieval_injects_prior_plans(tmp_path):
     events = []
     async for ev in agent.run("how do I bake a sandwich?",
                               AgentRunOptions(max_iterations=2,
-                                              plan_recall_threshold=0.0)):
+                                              plan_recall_threshold=0.0,
+                                              reviewer_count=1)):
         events.append(ev)
 
     planner_sys = client.last_planner_messages[0]["content"]
@@ -102,7 +103,7 @@ async def test_plan_storage_on_accept(tmp_path):
     registry.register(_StubSpawn())
 
     agent = Agent(client=client, registry=registry, memory=store)
-    async for _ in agent.run("a task", AgentRunOptions(max_iterations=2)):
+    async for _ in agent.run("a task", AgentRunOptions(max_iterations=2, reviewer_count=1)):
         pass
 
     plans = await store.list_handles(scope="plans")

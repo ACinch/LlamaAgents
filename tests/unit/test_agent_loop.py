@@ -148,7 +148,9 @@ async def test_planning_skipped_when_opts_skip_planning_true():
 async def test_planning_runs_when_orchestrator_registry_has_spawn():
     client = ScriptedClient([
         ChatResponse(content="1. do X\n2. do Y"),    # planner draft
-        ChatResponse(content="ACCEPT"),                # reviewer
+        ChatResponse(content="ACCEPT"),                # reviewer 0
+        ChatResponse(content="ACCEPT"),                # reviewer 1
+        ChatResponse(content="ACCEPT"),                # reviewer 2
         ChatResponse(content="all done"),              # main loop final reply
     ])
     agent = Agent(client=client, registry=_orchestrator_registry())
@@ -165,8 +167,12 @@ async def test_planning_iterates_on_reject_then_accepts():
     client = ScriptedClient([
         ChatResponse(content="bad plan"),                              # draft 1
         ChatResponse(content="REJECT: step 2 names a tool that does not exist"),
+        ChatResponse(content="REJECT: step 2 names a tool that does not exist"),
+        ChatResponse(content="REJECT: step 2 names a tool that does not exist"),
         ChatResponse(content="1. echo hi\n2. done"),                   # draft 2
-        ChatResponse(content="ACCEPT"),                                # accepted
+        ChatResponse(content="ACCEPT"),                                # reviewer 0
+        ChatResponse(content="ACCEPT"),                                # reviewer 1
+        ChatResponse(content="ACCEPT"),                                # reviewer 2
         ChatResponse(content="done"),                                  # main loop final
     ])
     agent = Agent(client=client, registry=_orchestrator_registry())
@@ -181,9 +187,15 @@ async def test_planning_gives_up_after_max_iterations_and_uses_last_plan():
     client = ScriptedClient([
         ChatResponse(content="plan A"),
         ChatResponse(content="REJECT: bad"),
+        ChatResponse(content="REJECT: bad"),
+        ChatResponse(content="REJECT: bad"),
         ChatResponse(content="plan B"),
         ChatResponse(content="REJECT: still bad"),
+        ChatResponse(content="REJECT: still bad"),
+        ChatResponse(content="REJECT: still bad"),
         ChatResponse(content="plan C"),
+        ChatResponse(content="REJECT: worse"),
+        ChatResponse(content="REJECT: worse"),
         ChatResponse(content="REJECT: worse"),
         ChatResponse(content="answer"),  # main loop after exhausting retries
     ])
@@ -277,3 +289,121 @@ def test_normalize_verdict_trailing_whitespace_stripped():
     from llama_agents.agent import _normalize_verdict
     accepted, feedback = _normalize_verdict("ACCEPT\n\n  \n")
     assert accepted is True
+
+
+async def test_three_accepts_accepts_plan_emits_three_verdicts():
+    client = ScriptedClient([
+        ChatResponse(content="1. echo hi\n2. done"),  # planner
+        ChatResponse(content="ACCEPT"),                 # reviewer 0
+        ChatResponse(content="ACCEPT"),                 # reviewer 1
+        ChatResponse(content="ACCEPT"),                 # reviewer 2
+        ChatResponse(content="all done"),               # main loop final
+    ])
+    agent = Agent(client=client, registry=_orchestrator_registry())
+    events = await _collect(agent.run("orchestrate", AgentRunOptions(max_iterations=3)))
+    rvs = [e for e in events if isinstance(e, ReviewerVerdict)]
+    accepted = [e for e in events if isinstance(e, PlanAccepted)]
+    assert len(rvs) == 3
+    assert all(rv.accepted for rv in rvs)
+    assert len(accepted) == 1 and accepted[0].attempts == 1
+
+
+async def test_majority_accept_wins():
+    client = ScriptedClient([
+        ChatResponse(content="plan"),                   # planner
+        ChatResponse(content="ACCEPT"),                 # reviewer 0
+        ChatResponse(content="REJECT: nope"),           # reviewer 1
+        ChatResponse(content="ACCEPT"),                 # reviewer 2
+        ChatResponse(content="done"),
+    ])
+    agent = Agent(client=client, registry=_orchestrator_registry())
+    events = await _collect(agent.run("orchestrate", AgentRunOptions(max_iterations=3)))
+    accepted = [e for e in events if isinstance(e, PlanAccepted)]
+    assert len(accepted) == 1 and accepted[0].attempts == 1
+
+
+async def test_majority_reject_triggers_retry():
+    client = ScriptedClient([
+        ChatResponse(content="plan 1"),
+        ChatResponse(content="REJECT: a"),
+        ChatResponse(content="ACCEPT"),
+        ChatResponse(content="REJECT: b"),
+        ChatResponse(content="plan 2"),
+        ChatResponse(content="ACCEPT"),
+        ChatResponse(content="ACCEPT"),
+        ChatResponse(content="ACCEPT"),
+        ChatResponse(content="done"),
+    ])
+    agent = Agent(client=client, registry=_orchestrator_registry())
+    events = await _collect(agent.run("orchestrate", AgentRunOptions(max_iterations=3)))
+    plans = [e for e in events if isinstance(e, PlanProposed)]
+    accepted = [e for e in events if isinstance(e, PlanAccepted)]
+    assert len(plans) == 2
+    assert len(accepted) == 1 and accepted[0].attempts == 2
+
+
+async def test_three_rejects_collates_distinct_feedback():
+    """Three distinct rejection reasons should appear as a bulleted list
+    in the planner's retry user message."""
+    client = ScriptedClient([
+        ChatResponse(content="plan 1"),
+        ChatResponse(content="REJECT: missing tool"),
+        ChatResponse(content="REJECT: scope drift"),
+        ChatResponse(content="REJECT: vague step 2"),
+        ChatResponse(content="plan 2"),
+        ChatResponse(content="ACCEPT"),
+        ChatResponse(content="ACCEPT"),
+        ChatResponse(content="ACCEPT"),
+        ChatResponse(content="done"),
+    ])
+    agent = Agent(client=client, registry=_orchestrator_registry())
+    await _collect(agent.run("orchestrate", AgentRunOptions(max_iterations=3)))
+    # The retry user message is the LAST message in the planner's second
+    # call's messages. Inspect via client.calls.
+    # Order of calls: planner(0), reviewer 0(1), reviewer 1(2), reviewer 2(3),
+    # planner(4 — second attempt), reviewer 0(5), ...
+    retry_user_msg = client.calls[4]["messages"][-1]["content"]
+    assert "missing tool" in retry_user_msg
+    assert "scope drift" in retry_user_msg
+    assert "vague step 2" in retry_user_msg
+    # Bulleted format when >1 distinct reasons
+    assert retry_user_msg.count("- ") >= 3
+
+
+async def test_three_rejects_dedupes_identical_feedback():
+    """Three reviewers giving identical feedback should produce only one
+    bullet in the retry message."""
+    client = ScriptedClient([
+        ChatResponse(content="plan 1"),
+        ChatResponse(content="REJECT: same problem"),
+        ChatResponse(content="REJECT: same problem"),
+        ChatResponse(content="REJECT: same problem"),
+        ChatResponse(content="plan 2"),
+        ChatResponse(content="ACCEPT"),
+        ChatResponse(content="ACCEPT"),
+        ChatResponse(content="ACCEPT"),
+        ChatResponse(content="done"),
+    ])
+    agent = Agent(client=client, registry=_orchestrator_registry())
+    await _collect(agent.run("orchestrate", AgentRunOptions(max_iterations=3)))
+    retry_user_msg = client.calls[4]["messages"][-1]["content"]
+    # Only one occurrence of the reason
+    assert retry_user_msg.count("same problem") == 1
+
+
+async def test_reviewer_count_one_consumes_single_call_per_attempt():
+    """Backwards-compat: reviewer_count=1 falls back to single-reviewer flow."""
+    client = ScriptedClient([
+        ChatResponse(content="plan"),
+        ChatResponse(content="ACCEPT"),
+        ChatResponse(content="done"),
+    ])
+    agent = Agent(client=client, registry=_orchestrator_registry())
+    events = await _collect(agent.run(
+        "orchestrate",
+        AgentRunOptions(max_iterations=3, reviewer_count=1),
+    ))
+    rvs = [e for e in events if isinstance(e, ReviewerVerdict)]
+    accepted = [e for e in events if isinstance(e, PlanAccepted)]
+    assert len(rvs) == 1
+    assert len(accepted) == 1
