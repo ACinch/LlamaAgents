@@ -7,11 +7,30 @@
     <script src="/static/htmx.min.js" defer></script>
 </head>
 <body>
-    <nav>
-        <a href="/">Dashboard</a>
-        <a href="/config">Config</a>
-    </nav>
-    {% block flash %}{% endblock %}
-    {% block content %}{% endblock %}
+    <header class="topnav">
+        <div class="brand">
+            <span class="brand-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                    <polyline points="2 17 12 22 22 17"/>
+                    <polyline points="2 12 12 17 22 12"/>
+                </svg>
+            </span>
+            <span>Llama Agents</span>
+        </div>
+        <nav class="nav-tabs">
+            <a href="/"       class="{% if active == 'dashboard' %}active{% endif %}">Dashboard</a>
+            <a href="/config" class="{% if active == 'config'    %}active{% endif %}">Config</a>
+        </nav>
+        <span class="status-pill">
+            <span class="status-dot"></span>
+            Server Online
+        </span>
+    </header>
+    <main>
+        {% block flash %}{% endblock %}
+        {% block content %}{% endblock %}
+    </main>
 </body>
 </html>

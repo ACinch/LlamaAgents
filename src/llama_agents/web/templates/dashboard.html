@@ -1,62 +1,167 @@
 {% extends "base.html" %}
-{% block title %}llama-agents — dashboard{% endblock %}
+{% block title %}Llama Agents — Dashboard{% endblock %}
 {% block content %}
-<div class="submit-row">
-    <form method="post" action="/api/submit" enctype="multipart/form-data">
-        <h2>Upload .md / .txt</h2>
-        <input type="file" name="file" accept=".md,.txt" required>
-        <p><button type="submit">Submit</button></p>
-    </form>
-    <form method="post" action="/api/submit">
-        <h2>Paste prompt</h2>
-        {% if presets %}
-        <p>
+
+<div class="row-2">
+    {# ---------- Upload card ---------- #}
+    <div class="card">
+        <h2>Upload File</h2>
+        <form method="post" action="/api/submit" enctype="multipart/form-data" id="upload-form">
+            <label class="dropzone" id="dropzone">
+                <input type="file" name="file" accept=".md,.txt" required id="dropzone-input">
+                <div class="dz-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="17 8 12 3 7 8"/>
+                        <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                </div>
+                <div class="dz-label">Drop your file here</div>
+                <div class="dz-hint">Supports .md and .txt files</div>
+                <div class="dz-filename" id="dz-filename"></div>
+            </label>
+            <button type="submit" class="full-btn primary">Submit File</button>
+        </form>
+    </div>
+
+    {# ---------- Paste prompt card ---------- #}
+    <div class="card">
+        <h2>Paste Prompt</h2>
+        <form method="post" action="/api/submit" class="paste-fields">
+            {% if presets %}
             <select id="preset-picker">
                 <option value="">— pick an example —</option>
                 {% for p in presets %}
                 <option value="{{ p.id }}">{{ p.label }}</option>
                 {% endfor %}
             </select>
-        </p>
-        <script type="application/json" id="presets-data">{{ presets | tojson }}</script>
-        <script>
-            (function () {
-                const data = JSON.parse(document.getElementById("presets-data").textContent);
-                const byId = Object.fromEntries(data.map(p => [p.id, p]));
-                const picker = document.getElementById("preset-picker");
-                // Resolve filename + textarea at change-time: at script-load
-                // time they are still being parsed (they appear AFTER this
-                // <script> in the document).
-                picker.addEventListener("change", function () {
-                    const p = byId[picker.value];
-                    if (!p) return;
-                    const form = picker.closest("form");
-                    const filename = form.querySelector('input[name="filename"]');
-                    const body = form.querySelector('textarea[name="body"]');
-                    body.value = p.body;
-                    if (!filename.value) filename.value = p.id + ".md";
-                });
-            })();
-        </script>
-        {% endif %}
-        <p><input type="text" name="filename" placeholder="task-&lt;unix&gt;.md"></p>
-        <p><textarea name="body" required></textarea></p>
-        <p><button type="submit">Submit</button></p>
-    </form>
+            <script type="application/json" id="presets-data">{{ presets | tojson }}</script>
+            <script>
+                (function () {
+                    const data = JSON.parse(document.getElementById("presets-data").textContent);
+                    const byId = Object.fromEntries(data.map(p => [p.id, p]));
+                    const picker = document.getElementById("preset-picker");
+                    picker.addEventListener("change", function () {
+                        const p = byId[picker.value];
+                        if (!p) return;
+                        const form = picker.closest("form");
+                        const filename = form.querySelector('input[name="filename"]');
+                        const body = form.querySelector('textarea[name="body"]');
+                        body.value = p.body;
+                        if (!filename.value) filename.value = p.id + ".md";
+                    });
+                })();
+            </script>
+            {% endif %}
+            <input type="text" name="filename" placeholder="task-<unix>.md">
+            <textarea name="body" required placeholder="Enter your prompt here..."></textarea>
+            <button type="submit" class="full-btn primary">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="22" y1="2" x2="11" y2="13"/>
+                    <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                </svg>
+                Submit Prompt
+            </button>
+        </form>
+    </div>
 </div>
-<div class="grid">
-    {% for status, label in [
-        ("inbox", "Inbox"),
-        ("processing", "Processing"),
-        ("done", "Done"),
-        ("failed", "Failed"),
+
+{# ---------- Bucket panels ---------- #}
+<div class="row-2">
+    {% for bucket in [
+        {"id": "inbox",      "label": "Inbox",      "cls": "bucket-inbox"},
+        {"id": "processing", "label": "Processing", "cls": "bucket-processing"},
+        {"id": "done",       "label": "Done",       "cls": "bucket-done"},
+        {"id": "failed",     "label": "Failed",     "cls": "bucket-failed"},
     ] %}
-    <div class="panel">
-        <h2>{{ label }}</h2>
-        <ul hx-get="/api/jobs/{{ status }}"
+    <div class="card" data-bucket="{{ bucket.id }}">
+        <h2 class="with-icon">
+            <span class="bucket-icon {{ bucket.cls }}">
+                {% if bucket.id == "inbox" %}
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/>
+                        <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>
+                    </svg>
+                {% elif bucket.id == "processing" %}
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="23 4 23 10 17 10"/>
+                        <polyline points="1 20 1 14 7 14"/>
+                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                    </svg>
+                {% elif bucket.id == "done" %}
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                        <polyline points="22 4 12 14.01 9 11.01"/>
+                    </svg>
+                {% else %}
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="15" y1="9" x2="9" y2="15"/>
+                        <line x1="9" y1="9" x2="15" y2="15"/>
+                    </svg>
+                {% endif %}
+            </span>
+            {{ bucket.label }}
+            <span class="header-count" id="count-{{ bucket.id }}">0</span>
+        </h2>
+        <ul class="job-list {{ bucket.id }}"
+            hx-get="/api/jobs/{{ bucket.id }}"
             hx-trigger="load, every 2s"
             hx-swap="innerHTML"></ul>
     </div>
     {% endfor %}
 </div>
+
+{# Drag-and-drop wiring for the upload dropzone #}
+<script>
+    (function () {
+        const dz = document.getElementById("dropzone");
+        const input = document.getElementById("dropzone-input");
+        const label = document.getElementById("dz-filename");
+        if (!dz || !input) return;
+
+        // Visual feedback after the native file picker fills the input
+        input.addEventListener("change", function () {
+            if (input.files && input.files.length) {
+                label.textContent = input.files[0].name;
+            } else {
+                label.textContent = "";
+            }
+        });
+
+        // Drag-and-drop from OS file explorer
+        ["dragenter", "dragover"].forEach(evt =>
+            dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add("dragover"); })
+        );
+        ["dragleave", "drop"].forEach(evt =>
+            dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove("dragover"); })
+        );
+        dz.addEventListener("drop", function (e) {
+            const files = e.dataTransfer && e.dataTransfer.files;
+            if (!files || !files.length) return;
+            // Push the dropped file into the hidden <input type=file>.
+            const dt = new DataTransfer();
+            dt.items.add(files[0]);
+            input.files = dt.files;
+            label.textContent = files[0].name;
+        });
+    })();
+
+    // Update the bucket header counts after each HTMX swap.
+    document.body.addEventListener("htmx:afterSwap", function (ev) {
+        const ul = ev.target;
+        if (!ul.classList || !ul.classList.contains("job-list")) return;
+        const bucket = ul.closest("[data-bucket]");
+        if (!bucket) return;
+        const count = ul.querySelectorAll("li").length;
+        const badge = bucket.querySelector(".header-count");
+        if (badge) badge.textContent = count;
+    });
+</script>
 {% endblock %}

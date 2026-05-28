@@ -12,10 +12,119 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markupsafe import escape as _esc
 
 from ..config import Config
 
 _WEB_DIR = Path(__file__).parent
+
+
+def _highlight_toml(text: str) -> str:
+    """Return HTML with span classes for a small TOML syntax subset.
+
+    Recognises comments, section headers, keys, strings, numbers, and
+    bools. Anything else is passed through escaped. Intentionally
+    line-by-line and regex-based — no full TOML parse.
+    """
+    out_lines: list[str] = []
+    section_re = re.compile(r"^(\s*)(\[\[?[^\]]+\]?\])(\s*)$")
+    kv_re = re.compile(r"^(\s*)([A-Za-z_][A-Za-z0-9_.-]*)(\s*=\s*)(.*?)(\s*)$")
+    for raw in text.splitlines():
+        line = raw
+        # comments (whole-line)
+        if line.lstrip().startswith("#"):
+            indent_len = len(line) - len(line.lstrip())
+            out_lines.append(
+                line[:indent_len]
+                + f'<span class="tk-comment">{_esc(line[indent_len:])}</span>'
+            )
+            continue
+        m = section_re.match(line)
+        if m:
+            indent, sect, tail = m.groups()
+            out_lines.append(
+                f"{indent}<span class=\"tk-section\">{_esc(sect)}</span>{tail}"
+            )
+            continue
+        m = kv_re.match(line)
+        if m:
+            indent, key, eq, val, tail = m.groups()
+            out_lines.append(
+                f"{indent}<span class=\"tk-key\">{_esc(key)}</span>"
+                f"<span class=\"tk-punct\">{_esc(eq)}</span>"
+                f"{_highlight_toml_value(val)}{tail}"
+            )
+            continue
+        out_lines.append(str(_esc(line)))
+    return "\n".join(out_lines)
+
+
+_NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
+
+
+def _highlight_toml_value(val: str) -> str:
+    """Highlight a single TOML value or a comma-separated list of them."""
+    stripped = val.strip()
+    if not stripped:
+        return ""
+    # Trailing inline comment?
+    inline_comment = ""
+    if "#" in stripped:
+        # only treat as comment if it's outside quotes — cheap heuristic:
+        # find the first # that is not inside a "...":
+        in_quote = False
+        for i, ch in enumerate(stripped):
+            if ch == '"':
+                in_quote = not in_quote
+            elif ch == "#" and not in_quote:
+                inline_comment = (
+                    f' <span class="tk-comment">{_esc(stripped[i:])}</span>'
+                )
+                stripped = stripped[:i].rstrip()
+                break
+    # Array
+    if stripped.startswith("[") and stripped.endswith("]"):
+        inner = stripped[1:-1]
+        parts = [_highlight_toml_value(p.strip()) for p in _split_top_commas(inner)]
+        return (
+            '<span class="tk-punct">[</span>'
+            + '<span class="tk-punct">, </span>'.join(parts)
+            + '<span class="tk-punct">]</span>'
+            + inline_comment
+        )
+    # String
+    if stripped.startswith('"') and stripped.endswith('"'):
+        return f'<span class="tk-string">{_esc(stripped)}</span>' + inline_comment
+    # Bool
+    if stripped in ("true", "false"):
+        return f'<span class="tk-bool">{stripped}</span>' + inline_comment
+    # Number
+    if _NUMBER_RE.match(stripped):
+        return f'<span class="tk-number">{stripped}</span>' + inline_comment
+    return str(_esc(stripped)) + inline_comment
+
+
+def _split_top_commas(s: str) -> list[str]:
+    """Split on commas that are not inside quotes or brackets."""
+    out: list[str] = []
+    depth = 0
+    in_quote = False
+    buf = []
+    for ch in s:
+        if ch == '"':
+            in_quote = not in_quote
+        elif not in_quote and ch in "[{":
+            depth += 1
+        elif not in_quote and ch in "]}":
+            depth -= 1
+        elif not in_quote and ch == "," and depth == 0:
+            out.append("".join(buf))
+            buf = []
+            continue
+        buf.append(ch)
+    if buf:
+        out.append("".join(buf))
+    return out
 
 
 def _fmt_ts(iso: str) -> str:
@@ -184,7 +293,7 @@ def register_routes(
     async def dashboard(request: Request):
         return templates.TemplateResponse(
             request, "dashboard.html",
-            {"presets": _load_presets(repo_root)},
+            {"presets": _load_presets(repo_root), "active": "dashboard"},
         )
 
     @app.get("/api/jobs/{status}", response_class=HTMLResponse)
@@ -274,6 +383,7 @@ def register_routes(
                 "events": events,
                 "result": result_text,
                 "error": error_text,
+                "active": "dashboard",
             },
         )
 
@@ -285,5 +395,10 @@ def register_routes(
             raise HTTPException(status_code=500, detail=f"cannot read config: {e}")
         return templates.TemplateResponse(
             request, "config.html",
-            {"path": str(config_path), "content": content},
+            {
+                "path": str(config_path),
+                "content": content,
+                "highlighted": _highlight_toml(content),
+                "active": "config",
+            },
         )
