@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import FastAPI
@@ -15,6 +16,7 @@ from .config import Config
 from .events import AssistantChunk, Done, LoopError, MemoryEvicted, MemoryStored, ToolCallResult, ToolCallStart
 from .queue.worker import JobQueueWorker
 from .runtime import Runtime, _resolve_queue_root
+from .web.routes import register_routes
 
 
 class ChatRequest(BaseModel):
@@ -27,6 +29,7 @@ def create_app(
     cfg: Config,
     *,
     client_factory: Callable | None = None,
+    config_path: Path | None = None,
 ) -> FastAPI:
     runtime_box: dict[str, Runtime] = {}
     worker_box: dict[str, JobQueueWorker | None] = {"worker": None}
@@ -82,6 +85,9 @@ def create_app(
                 yield _serialize(ev)
 
         return EventSourceResponse(gen())
+
+    if config_path is not None:
+        register_routes(app, cfg, config_path=config_path)
 
     return app
 

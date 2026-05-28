@@ -71,7 +71,7 @@ def serve(
     from .http_app import create_app
 
     cfg = load_config(config)
-    fastapi_app = create_app(cfg)
+    fastapi_app = create_app(cfg, config_path=config)
     uvicorn.run(fastapi_app, host=cfg.http.host, port=cfg.http.port)
 
 
