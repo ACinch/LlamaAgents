@@ -32,15 +32,15 @@ tools — driven through a CLI or an HTTP/SSE service.
 |---|---|
 | **Python 3.12+** | The package targets `>=3.12` (uses modern type unions, `tomllib`). |
 | **[`uv`](https://docs.astral.sh/uv/)** | Dependency + virtualenv management. All commands below assume `uv` is on `PATH`. On Windows it usually installs to `%USERPROFILE%\AppData\Roaming\Python\Python314\Scripts\uv.exe` — prepend that to `PATH` or invoke by full path. |
-| **NVIDIA GPU + CUDA 12.4+ drivers** | The agent runs `llama-server` locally with `-ngl 999` (offload all layers). CPU-only inference is technically possible but not tuned for. |
 | **A C/C++ runtime** | Needed to run the prebuilt `llama-server.exe`. On Windows that's the VC++ 2019+ redistributable; most systems already have it. |
 
 | Optional | Unlocks |
 |---|---|
+| **NVIDIA GPU + CUDA 12.4+ drivers** | Strongly recommended. `llama.cpp` also supports Vulkan and a pure-CPU backend, but at this model size both are slow enough to be impractical for interactive use — pick the matching `llama.cpp` build if you take that route. The defaults in `config.toml` (`ngl = 999`) assume a CUDA build. |
 | **`llama.cpp` build** (or skip — `llamactl init` can download a pinned Windows-CUDA release) | The local inference server. If you already have `llama.cpp` cloned next to this repo at `../llama.cpp/build/bin/Release/llama-server.exe`, the wizard finds it automatically. |
 | **A GGUF model file** | A 30B-MoE Q4 fits 24 GB cards; smaller quants for 8–16 GB. The wizard offers three curated picks and downloads from HuggingFace via `huggingface_hub` (optional extra). |
 | **`huggingface_hub`** (`uv add huggingface_hub`) | Lets `llamactl init` download the recommended GGUF. Skip if you'll drop your own model into `./GGUF/`. |
-| **`nvidia-smi`** | Lets the wizard auto-detect VRAM and pick a model tier for you. Comes with NVIDIA drivers. |
+| **`nvidia-smi`** | Lets the wizard auto-detect VRAM and pick a model tier for you. Ships with NVIDIA drivers; if absent (e.g. on a Vulkan or CPU box) the wizard just asks you to pick a tier manually. |
 | **Node.js** | Only if you wire up the RAG MCP server in `.mcp.json` (see `docs/examples/marketing-suggestions-from-rag.md`). |
 | **A modern browser** | For the web UI (Chrome / Firefox / Edge). |
 
