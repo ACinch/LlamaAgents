@@ -34,6 +34,7 @@ class JobResult:
     final_text: str
     events: list[dict[str, Any]]
     loop_error: LoopError | None
+    prompt_text: str
 
 
 class JobQueueWorker:
@@ -155,6 +156,7 @@ class JobQueueWorker:
             final_text="\n\n".join(final_chunks) or "[no final answer]",
             events=events,
             loop_error=loop_error,
+            prompt_text=prompt,
         )
 
     async def _finalize(
@@ -168,6 +170,8 @@ class JobQueueWorker:
             "\n".join(json.dumps(e) for e in result.events) + "\n",
             encoding="utf-8",
         )
+        prompt_path = dst.with_suffix(".prompt.md")
+        prompt_path.write_text(result.prompt_text, encoding="utf-8")
         if not result.success:
             err_path = dst.with_suffix(".error.txt")
             err = result.loop_error

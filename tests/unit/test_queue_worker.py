@@ -401,3 +401,53 @@ async def test_new_worker_sweeps_processing_back_into_inbox(tmp_path):
             pass
 
     assert (tmp_path / "done" / "recovered.md").read_text() == "done now"
+
+
+@pytest.mark.asyncio
+async def test_finalize_writes_prompt_sidecar_to_done(queue_cfg, tmp_path):
+    ensure_dirs(queue_cfg.root)
+    (tmp_path / "inbox" / "foo.md").write_text("please pong")
+
+    rt = _StubRuntime(lambda: _ScriptedClient(ChatResponse(content="pong")))
+    worker = JobQueueWorker(rt, queue_cfg)
+    task = asyncio.create_task(worker.run())
+    try:
+        ok = await _wait_until(lambda: (tmp_path / "done" / "foo.md").exists())
+        assert ok
+    finally:
+        await worker.drain(timeout=1.0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    prompt_sidecar = tmp_path / "done" / "foo.prompt.md"
+    assert prompt_sidecar.is_file()
+    assert prompt_sidecar.read_text(encoding="utf-8") == "please pong"
+
+
+@pytest.mark.asyncio
+async def test_finalize_writes_prompt_sidecar_to_failed(queue_cfg, tmp_path):
+    from llama_agents.errors import LlamaProtocolError
+
+    ensure_dirs(queue_cfg.root)
+    (tmp_path / "inbox" / "boom.md").write_text("trigger error")
+
+    rt = _StubRuntime(lambda: _ErroringClient(LlamaProtocolError("bad shape")))
+    worker = JobQueueWorker(rt, queue_cfg)
+    task = asyncio.create_task(worker.run())
+    try:
+        ok = await _wait_until(lambda: (tmp_path / "failed" / "boom.md").exists())
+        assert ok
+    finally:
+        await worker.drain(timeout=1.0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    prompt_sidecar = tmp_path / "failed" / "boom.prompt.md"
+    assert prompt_sidecar.is_file()
+    assert prompt_sidecar.read_text(encoding="utf-8") == "trigger error"
