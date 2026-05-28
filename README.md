@@ -26,6 +26,8 @@ tools — driven through a CLI or an HTTP/SSE service.
   blocks so the model can't fill the context window in a single
   monologue.
 
+![Web Dashboard](https://raw.githubusercontent.com/ACinch/LlamaAgents/refs/heads/main/docs/dashboard.png)
+
 ## Prerequisites
 
 | Required | What for |
