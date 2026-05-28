@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json as _json
 import os
 import re
 import time
@@ -82,6 +83,50 @@ def _list_jobs(root: Path, status: str, *, limit: int | None = None) -> list[_Jo
     return rows
 
 
+_EVENT_STYLE: dict[str, tuple[str, str | None]] = {
+    "PlanProposed":     ("gray",   "attempt"),
+    "PlanReviewed":     ("gray",   "accepted"),
+    "PlanAccepted":     ("green",  "attempts"),
+    "ToolCallStart":    ("blue",   "name"),
+    "ToolCallResult":   ("blue",   "ok"),
+    "AssistantChunk":   ("violet", None),
+    "MemoryStored":     ("teal",   "kind"),
+    "MemoryEvicted":    ("teal",   "bytes_freed"),
+    "LoopError":        ("red",    "error_type"),
+    "Done":             ("green",  "reason"),
+}
+
+
+def _decorate_event(raw_line: str) -> dict | None:
+    try:
+        ev = _json.loads(raw_line)
+    except _json.JSONDecodeError:
+        return None
+    t = ev.get("type", "?")
+    color, summary_key = _EVENT_STYLE.get(t, ("gray", None))
+    summary_val = ev.get(summary_key) if summary_key else None
+    if isinstance(summary_val, str) and len(summary_val) > 80:
+        summary_val = summary_val[:80] + "…"
+    ev["_color"] = color
+    ev["_summary"] = "" if summary_val is None else f"{summary_key}={summary_val}"
+    ev["_raw"] = _json.dumps(ev, indent=2, ensure_ascii=False)
+    return ev
+
+
+def _read_events(path: Path) -> list[dict]:
+    if not path.is_file():
+        return []
+    out: list[dict] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        decorated = _decorate_event(line)
+        if decorated is not None:
+            out.append(decorated)
+    return out
+
+
 def register_routes(
     app: FastAPI, cfg: Config, *, config_path: Path
 ) -> None:
@@ -148,3 +193,44 @@ def register_routes(
         tmp.write_text(content, encoding="utf-8")
         os.replace(tmp, target)
         return RedirectResponse(url="/", status_code=303)
+
+    @app.get("/jobs/{status}/{name}", response_class=HTMLResponse)
+    async def job_detail(request: Request, status: str, name: str):
+        if status not in _VALID_STATUSES:
+            raise HTTPException(status_code=404, detail="unknown status")
+        if not _SAFE_NAME.match(name) or not name.endswith(".md"):
+            raise HTTPException(status_code=404, detail="invalid name")
+        root = Path(cfg.queue.root)
+        main = root / status / name
+        if not main.is_file():
+            raise HTTPException(status_code=404, detail="job not found")
+
+        if status in ("inbox", "processing"):
+            prompt_text = main.read_text(encoding="utf-8")
+            result_text = ""
+        else:
+            prompt_sidecar = main.with_suffix(".prompt.md")
+            prompt_text = (
+                prompt_sidecar.read_text(encoding="utf-8")
+                if prompt_sidecar.is_file() else ""
+            )
+            result_text = main.read_text(encoding="utf-8")
+
+        events = _read_events(main.with_suffix(".events.jsonl"))
+        error_text = ""
+        if status == "failed":
+            err = main.with_suffix(".error.txt")
+            if err.is_file():
+                error_text = err.read_text(encoding="utf-8")
+
+        return templates.TemplateResponse(
+            request, "job.html",
+            {
+                "status": status,
+                "name": name,
+                "prompt": prompt_text,
+                "events": events,
+                "result": result_text,
+                "error": error_text,
+            },
+        )

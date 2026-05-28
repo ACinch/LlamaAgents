@@ -219,3 +219,99 @@ async def test_submit_rejects_duplicate(cfg, config_path):
             )
             assert r.status_code == 400
     assert (cfg.queue.root / "inbox" / "dupe.md").read_text(encoding="utf-8") == "existing"
+
+
+@pytest.mark.asyncio
+async def test_job_detail_inbox_shows_prompt_body(cfg, config_path):
+    _seed_queue_dirs(cfg.queue.root)
+    (cfg.queue.root / "inbox" / "foo.md").write_text("the actual prompt")
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.get("/jobs/inbox/foo.md")
+            assert r.status_code == 200
+            assert "the actual prompt" in r.text
+            assert "no events recorded" in r.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_job_detail_done_shows_prompt_events_and_answer(cfg, config_path):
+    import json as _json
+    _seed_queue_dirs(cfg.queue.root)
+    done = cfg.queue.root / "done"
+    (done / "foo.md").write_text("FINAL ANSWER")
+    (done / "foo.prompt.md").write_text("ORIGINAL PROMPT")
+    events = [
+        {"type": "ToolCallStart", "ts": "2026-05-27T10:00:00+00:00",
+         "call_id": "c1", "name": "fs_read_file", "arguments": {"path": "x"}},
+        {"type": "Done", "ts": "2026-05-27T10:00:05+00:00",
+         "reason": "finished", "final_message": "FINAL ANSWER"},
+    ]
+    (done / "foo.events.jsonl").write_text(
+        "\n".join(_json.dumps(e) for e in events) + "\n", encoding="utf-8"
+    )
+
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.get("/jobs/done/foo.md")
+            assert r.status_code == 200
+            assert "ORIGINAL PROMPT" in r.text
+            assert "FINAL ANSWER" in r.text
+            assert "ToolCallStart" in r.text
+            assert "Done" in r.text
+
+
+@pytest.mark.asyncio
+async def test_job_detail_failed_shows_error(cfg, config_path):
+    _seed_queue_dirs(cfg.queue.root)
+    failed = cfg.queue.root / "failed"
+    (failed / "boom.md").write_text("[no final answer]")
+    (failed / "boom.prompt.md").write_text("trigger")
+    (failed / "boom.events.jsonl").write_text("")
+    (failed / "boom.error.txt").write_text(
+        "attempts: 1\nerror_type: LlamaProtocolError\nmessage: bad shape\n"
+    )
+
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.get("/jobs/failed/boom.md")
+            assert r.status_code == 200
+            assert "LlamaProtocolError" in r.text
+            assert "bad shape" in r.text
+
+
+@pytest.mark.asyncio
+async def test_job_detail_missing_returns_404(cfg, config_path):
+    _seed_queue_dirs(cfg.queue.root)
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.get("/jobs/done/missing.md")
+            assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_job_detail_invalid_status_returns_404(cfg, config_path):
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.get("/jobs/elsewhere/foo.md")
+            assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_job_detail_rejects_path_traversal_in_name(cfg, config_path):
+    _seed_queue_dirs(cfg.queue.root)
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.get("/jobs/done/..%2Fconfig.toml")
+            assert r.status_code in (400, 404)

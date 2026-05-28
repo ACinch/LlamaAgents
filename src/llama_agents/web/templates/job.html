@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} — {{ status }}{% endblock %}
+{% block content %}
+<p><a href="/">← Back to dashboard</a></p>
+<h1>{{ name }} <span class="muted">({{ status }})</span></h1>
+
+<h2>Prompt</h2>
+<pre class="prompt-block">{{ prompt or "(prompt unavailable)" }}</pre>
+
+<h2>Events</h2>
+{% if events %}
+    {% for ev in events %}
+        <details class="event">
+            <summary>
+                <span class="badge {{ ev._color }}">{{ ev.type }}</span>
+                <span class="muted">{{ ev.ts | fmt_ts }}</span>
+                {% if ev._summary %}— {{ ev._summary }}{% endif %}
+            </summary>
+            <pre>{{ ev._raw }}</pre>
+        </details>
+    {% endfor %}
+{% else %}
+    <p class="muted">(no events recorded)</p>
+{% endif %}
+
+{% if status == "done" %}
+    <h2>Final answer</h2>
+    <pre class="prompt-block">{{ result }}</pre>
+{% endif %}
+
+{% if error %}
+    <h2>Error</h2>
+    <pre class="error-block">{{ error }}</pre>
+{% endif %}
+{% endblock %}
