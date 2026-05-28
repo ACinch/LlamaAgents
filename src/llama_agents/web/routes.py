@@ -136,6 +136,34 @@ def _read_events(path: Path) -> list[dict]:
     return out
 
 
+def _load_presets(repo_root: Path) -> list[dict]:
+    """Read docs/examples/*.md as paste-prompt presets.
+
+    Each preset gets {id, label, body}. Skips README.md and files whose
+    name starts with '_' (meta/notes). Label is the first '# ' heading,
+    falling back to the filename stem.
+    """
+    examples_dir = repo_root / "docs" / "examples"
+    if not examples_dir.is_dir():
+        return []
+    out: list[dict] = []
+    for p in sorted(examples_dir.glob("*.md")):
+        if p.name.lower() == "readme.md" or p.name.startswith("_"):
+            continue
+        try:
+            body = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        label = p.stem
+        for line in body.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("# "):
+                label = stripped[2:].strip()
+                break
+        out.append({"id": p.stem, "label": label, "body": body})
+    return out
+
+
 def register_routes(
     app: FastAPI, cfg: Config, *, config_path: Path
 ) -> None:
@@ -143,6 +171,8 @@ def register_routes(
     templates = Jinja2Templates(directory=str(_WEB_DIR / "templates"))
     templates.env.filters["fmt_ts"] = _fmt_ts
     templates.env.filters["age"] = _age
+
+    repo_root = config_path.parent
 
     app.mount(
         "/static",
@@ -152,7 +182,10 @@ def register_routes(
 
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request):
-        return templates.TemplateResponse(request, "dashboard.html", {})
+        return templates.TemplateResponse(
+            request, "dashboard.html",
+            {"presets": _load_presets(repo_root)},
+        )
 
     @app.get("/api/jobs/{status}", response_class=HTMLResponse)
     async def jobs_partial(request: Request, status: str):

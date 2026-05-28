@@ -9,6 +9,33 @@
     </form>
     <form method="post" action="/api/submit">
         <h2>Paste prompt</h2>
+        {% if presets %}
+        <p>
+            <select id="preset-picker">
+                <option value="">— pick an example —</option>
+                {% for p in presets %}
+                <option value="{{ p.id }}">{{ p.label }}</option>
+                {% endfor %}
+            </select>
+        </p>
+        <script type="application/json" id="presets-data">{{ presets | tojson }}</script>
+        <script>
+            (function () {
+                const data = JSON.parse(document.getElementById("presets-data").textContent);
+                const byId = Object.fromEntries(data.map(p => [p.id, p]));
+                const picker = document.getElementById("preset-picker");
+                const form = picker.closest("form");
+                const filename = form.querySelector('input[name="filename"]');
+                const body = form.querySelector('textarea[name="body"]');
+                picker.addEventListener("change", function () {
+                    const p = byId[picker.value];
+                    if (!p) return;
+                    body.value = p.body;
+                    if (!filename.value) filename.value = p.id + ".md";
+                });
+            })();
+        </script>
+        {% endif %}
         <p><input type="text" name="filename" placeholder="task-&lt;unix&gt;.md"></p>
         <p><textarea name="body" required></textarea></p>
         <p><button type="submit">Submit</button></p>

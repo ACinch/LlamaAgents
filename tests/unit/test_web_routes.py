@@ -374,3 +374,42 @@ async def test_list_jobs_skips_files_that_vanish_between_iterdir_and_stat(cfg, c
             assert r.status_code == 200
             assert "alive.md" in r.text
             assert "ghost.md" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_lists_presets_from_docs_examples(cfg, tmp_path: Path):
+    # Stage a fake docs/examples next to the config so _load_presets finds them.
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('[llama]\nserver_url = "x"\n', encoding="utf-8")
+    examples = tmp_path / "docs" / "examples"
+    examples.mkdir(parents=True)
+    (examples / "alpha-task.md").write_text("# First example\n\nbody A\n", encoding="utf-8")
+    (examples / "beta-task.md").write_text("# Second example\n\nbody B\n", encoding="utf-8")
+    (examples / "README.md").write_text("# README — should be filtered\n", encoding="utf-8")
+    (examples / "_meta.md").write_text("# Meta — should be filtered\n", encoding="utf-8")
+
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.get("/")
+            assert r.status_code == 200
+            assert "First example" in r.text
+            assert "Second example" in r.text
+            assert "alpha-task" in r.text       # the id appears as option value
+            assert "preset-picker" in r.text    # the <select> id
+            assert "presets-data" in r.text     # the JSON data block
+            assert "README — should be filtered" not in r.text
+            assert "Meta — should be filtered" not in r.text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_omits_preset_picker_when_no_examples(cfg, config_path):
+    """No docs/examples folder near the config -> dropdown not rendered."""
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.get("/")
+            assert r.status_code == 200
+            assert "preset-picker" not in r.text
