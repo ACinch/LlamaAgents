@@ -345,3 +345,32 @@ async def test_config_view_re_reads_file_per_request(cfg, config_path):
             config_path.write_text('[llama]\nserver_url = "second"\n', encoding="utf-8")
             r2 = await ac.get("/config")
             assert "second" in r2.text
+
+
+@pytest.mark.asyncio
+async def test_list_jobs_skips_files_that_vanish_between_iterdir_and_stat(cfg, config_path, tmp_path, monkeypatch):
+    """If the worker moves a file out from under us, the list endpoint
+    should skip it rather than 500."""
+    _seed_queue_dirs(cfg.queue.root)
+    # Stage one real file (alive) and one that 'vanishes' via monkeypatched stat.
+    (cfg.queue.root / "inbox" / "alive.md").write_text("present")
+    ghost = cfg.queue.root / "inbox" / "ghost.md"
+    ghost.write_text("about to vanish")
+
+    real_stat = Path.stat
+
+    def fake_stat(self, *args, **kwargs):
+        if self.name == "ghost.md":
+            raise FileNotFoundError(str(self))
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fake_stat)
+
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.get("/api/jobs/inbox")
+            assert r.status_code == 200
+            assert "alive.md" in r.text
+            assert "ghost.md" not in r.text

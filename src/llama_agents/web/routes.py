@@ -70,13 +70,19 @@ def _list_jobs(root: Path, status: str, *, limit: int | None = None) -> list[_Jo
     dir_ = root / status
     if not dir_.is_dir():
         return []
-    rows = [
-        _JobEntry(name=p.name, mtime=p.stat().st_mtime)
-        for p in dir_.iterdir()
-        if p.is_file()
-        and p.suffix == ".md"
-        and not p.stem.endswith(".prompt")
-    ]
+    rows: list[_JobEntry] = []
+    for p in dir_.iterdir():
+        if not p.is_file():
+            continue
+        if p.suffix != ".md" or p.stem.endswith(".prompt"):
+            continue
+        try:
+            mtime = p.stat().st_mtime
+        except FileNotFoundError:
+            # Worker moved/removed the file between iterdir and stat;
+            # skip rather than 500.
+            continue
+        rows.append(_JobEntry(name=p.name, mtime=mtime))
     rows.sort(key=lambda r: r.mtime, reverse=True)
     if limit is not None:
         rows = rows[:limit]
@@ -107,9 +113,12 @@ def _decorate_event(raw_line: str) -> dict | None:
     summary_val = ev.get(summary_key) if summary_key else None
     if isinstance(summary_val, str) and len(summary_val) > 80:
         summary_val = summary_val[:80] + "…"
+    # Compute the raw view BEFORE attaching internal keys, so the
+    # collapsed-details view shows only the event's real fields.
+    raw = _json.dumps(ev, indent=2, ensure_ascii=False)
     ev["_color"] = color
     ev["_summary"] = "" if summary_val is None else f"{summary_key}={summary_val}"
-    ev["_raw"] = _json.dumps(ev, indent=2, ensure_ascii=False)
+    ev["_raw"] = raw
     return ev
 
 
@@ -164,12 +173,12 @@ def register_routes(
         accepted = list(cfg.queue.accepted_extensions)
         if file is not None and file.filename:
             name = _validate_name(file.filename, accepted)
-            content_bytes = await file.read()
             if name is None:
                 return PlainTextResponse(
                     f"invalid filename or extension: {file.filename!r}",
                     status_code=400,
                 )
+            content_bytes = await file.read()
             content = content_bytes.decode("utf-8", errors="replace")
         else:
             raw_name = (filename or "").strip() or f"task-{int(time.time())}.md"
