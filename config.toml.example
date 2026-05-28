@@ -1,0 +1,54 @@
+[llama]
+server_url = "http://127.0.0.1:8080"
+model = "qwen3.6-35b-uncensored"
+auto_spawn = true
+kill_on_exit = true
+server_bin = "/llama.cpp/build/bin/Release/llama-server.exe"
+model_path = "LLM/GGUF/Qwen36/Qwen3.6-35B-A3Bgguf"
+ngl = 999
+ctx_size = 65536
+n_parallel = 2
+startup_timeout_seconds = 300
+
+[agent]
+max_iterations = 20
+max_concurrent_agents = 5
+token_budget_pct = 0.8
+
+[sandbox]
+allowed_dirs = ["/LLM/llama-agents","C:/backup/Private/Stories"]
+shell_allowlist = ["git", "pytest"]
+
+[http]
+host = "127.0.0.1"
+port = 9000
+
+[[mcp_servers]]
+name = "rag"
+command = "node"
+args = ["/LLM/rag/dist/index.js"]
+
+[memory]
+enabled = true
+root = ".llama_agents/memory"
+embedding_model = "BAAI/bge-small-en-v1.5"
+chunk_size = 1500
+chunk_overlap = 150
+plan_recall_k = 3
+plan_recall_threshold = 0.5
+subagent_inline_threshold_chars = 2000
+subagent_summary_max_tokens = 400
+evict_threshold_pct = 70
+evict_tool_result_min_chars = 4000
+scratch_retention_hours = 24
+
+[queue]
+enabled = true
+# root = ".llama_agents/queue"          # default
+# poll_interval_seconds = 2.0
+# max_concurrent = 1
+# max_retries = 2
+# retry_backoff_seconds = 5.0
+# max_iterations = 20
+# drain_timeout_seconds = 30.0
+# accepted_extensions = [".md", ".txt"]
