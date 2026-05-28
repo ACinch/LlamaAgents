@@ -7,6 +7,7 @@ from llama_agents.agent import Agent, AgentRunOptions
 from llama_agents.events import (
     AssistantChunk,
     Done,
+    LoopError,
     PlanAccepted,
     PlanProposed,
     PlanReviewed,
@@ -407,3 +408,66 @@ async def test_reviewer_count_one_consumes_single_call_per_attempt():
     accepted = [e for e in events if isinstance(e, PlanAccepted)]
     assert len(rvs) == 1
     assert len(accepted) == 1
+
+
+class _PartialFailureClient:
+    """Returns scripted responses, but raises on a specific call index."""
+
+    def __init__(self, script: list, fail_indices: set[int], exc: Exception):
+        self._script = list(script)
+        self._fail = fail_indices
+        self._exc = exc
+        self._i = -1
+        self.calls: list[dict[str, Any]] = []
+
+    async def chat(self, *, messages, tools, temperature=0.2, reasoning_budget_tokens=None):
+        self._i += 1
+        self.calls.append({"messages": list(messages), "tools": tools})
+        if self._i in self._fail:
+            raise self._exc
+        return self._script.pop(0)
+
+
+async def test_one_reviewer_exception_treated_as_reject_vote():
+    """1 reviewer raises + 2 ACCEPT = 2/3 majority, plan accepted."""
+    from llama_agents.errors import LlamaUnreachable
+
+    # Script: planner (idx 0), reviewer-0 raises (idx 1), reviewer-1 ACCEPT (idx 2),
+    # reviewer-2 ACCEPT (idx 3), main loop final (idx 4)
+    script = [
+        ChatResponse(content="plan"),    # planner (idx 0)
+        ChatResponse(content="ACCEPT"),  # reviewer-1 (idx 2 after failure)
+        ChatResponse(content="ACCEPT"),  # reviewer-2 (idx 3)
+        ChatResponse(content="done"),    # main loop (idx 4)
+    ]
+    client = _PartialFailureClient(script, {1}, LlamaUnreachable("conn refused"))
+    agent = Agent(client=client, registry=_orchestrator_registry())
+    events = await _collect(agent.run("orchestrate", AgentRunOptions(max_iterations=3)))
+    rvs = [e for e in events if isinstance(e, ReviewerVerdict)]
+    accepted = [e for e in events if isinstance(e, PlanAccepted)]
+    # One verdict is False (the exception), two are True
+    falses = [r for r in rvs if not r.accepted]
+    trues = [r for r in rvs if r.accepted]
+    assert len(falses) == 1
+    assert "LlamaUnreachable" in falses[0].feedback
+    assert len(trues) == 2
+    assert len(accepted) == 1
+
+
+async def test_all_reviewers_exception_emits_loop_error_and_no_plan_accepted():
+    from llama_agents.errors import LlamaUnreachable
+
+    # Script: planner (idx 0), all 3 reviewers raise (idx 1,2,3), main loop (idx 4)
+    # When all reviewers fail, LoopError is emitted but main loop still runs.
+    script = [
+        ChatResponse(content="plan"),  # planner (idx 0)
+        ChatResponse(content="done"),  # main loop (idx 4 after 3 reviewer failures)
+    ]
+    client = _PartialFailureClient(script, {1, 2, 3}, LlamaUnreachable("server down"))
+    agent = Agent(client=client, registry=_orchestrator_registry())
+    events = await _collect(agent.run("orchestrate", AgentRunOptions(max_iterations=3)))
+    errors = [e for e in events if isinstance(e, LoopError)]
+    accepted = [e for e in events if isinstance(e, PlanAccepted)]
+    assert len(errors) == 1
+    assert errors[0].error_type == "LlamaUnreachable"
+    assert len(accepted) == 0
