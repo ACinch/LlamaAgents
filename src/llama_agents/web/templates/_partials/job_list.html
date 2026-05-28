@@ -1,0 +1,5 @@
+{% if jobs %}
+    {% for job in jobs %}
+        {% include "_partials/job_row.html" %}
+    {% endfor %}
+{% endif %}
