@@ -164,6 +164,24 @@ llama-agents/
 └── CLAUDE.md                # required reading for AI assistants
 ```
 
+## License
+
+Released under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+
+In plain English: you may use, modify, and share this code for any
+**noncommercial** purpose — personal projects, research, education,
+charitable or government work. **Commercial use is not permitted** under
+this license. The software is provided **as-is, without warranty of any
+kind, and you use it at your own risk.**
+
+PolyForm Noncommercial includes a patent grant covering anything the
+authors can license. Because it imposes a field-of-use restriction
+(no commercial use), it is technically **source-available** rather than
+OSI-approved open-source — but the full source is here and you can read,
+modify, and redistribute it under the same terms.
+
+If you want to use this commercially, open an issue.
+
 ## See also
 
 - [`CLAUDE.md`](CLAUDE.md) — architecture, invariants, dev workflow.
