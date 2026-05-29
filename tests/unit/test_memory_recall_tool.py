@@ -34,3 +34,36 @@ async def test_memory_recall_with_handle_restricts(tmp_path):
     res = await tool.invoke({"query": "tuna", "handle": h1})
     assert all(c["blob_id"] == h1 for c in res["chunks"])
     await store.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_recall_uses_ancestor_chain(tmp_path):
+    """Forked thread should recall from parent's blobs."""
+    from llama_agents.thread.store import ThreadStore
+
+    store_root = tmp_path / "memory"
+    threads_root = tmp_path / "threads"
+    threads_root.mkdir()
+
+    mem = MemoryStore(root=store_root, embedder=HashEmbedder(dim=32))
+    await mem.init()
+    thread_store = ThreadStore(threads_root)
+
+    parent_id = thread_store.create_thread(title="parent")
+    child_id = thread_store.create_thread(
+        title="child", parent_thread_id=parent_id, parent_turn_idx=1,
+    )
+
+    mem.start_run(parent_id)
+    await mem.store_blob(kind="user", scope="run", thread_id=parent_id,
+                         title="parent-blob", body="quick brown fox")
+
+    # The tool is configured with a thread_id_getter returning the CHILD;
+    # it should still find the parent's blob via the ancestor chain.
+    tool = MemoryRecallTool(
+        store=mem, thread_id_getter=lambda: child_id,
+        thread_store=thread_store,
+    )
+    res = await tool.invoke({"query": "quick brown fox", "k": 3})
+    assert any(c["title"] == "parent-blob" for c in res["chunks"])
+    await mem.close()

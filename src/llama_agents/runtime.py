@@ -9,6 +9,7 @@ from .config import Config
 from .llama_client import LlamaClient, LlamaServerManager
 from .memory.embedder import FastEmbedEmbedder
 from .memory.store import InertMemoryStore, MemoryStore
+from .thread.store import ThreadStore
 from .tools.builtin.fs import (
     EditFileTool,
     ListFilesTool,
@@ -40,6 +41,7 @@ class Runtime:
         registry: ToolRegistry,
         semaphore: asyncio.Semaphore,
         memory: "MemoryStore | InertMemoryStore",
+        thread_store: ThreadStore,
     ) -> None:
         self.cfg = cfg
         self.client = client
@@ -48,6 +50,7 @@ class Runtime:
         self.registry = registry
         self.semaphore = semaphore
         self.memory = memory
+        self.thread_store = thread_store
 
     @classmethod
     async def create(
@@ -96,17 +99,25 @@ class Runtime:
 
         sem = asyncio.Semaphore(cfg.agent.max_concurrent_agents)
 
+        threads_root = _resolve_queue_root(cfg) / "threads"
+        threads_root.mkdir(parents=True, exist_ok=True)
+        thread_store = ThreadStore(threads_root)
+
         bridge: McpBridge | None = None
         if cfg.mcp_servers:
             bridge = McpBridge(cfg.mcp_servers)
             for t in await bridge.start():
                 registry.register(t)
 
-        rt = cls(cfg, client, manager, bridge, registry, sem, mem)
+        rt = cls(cfg, client, manager, bridge, registry, sem, mem, thread_store)
 
         # memory_recall tool (always available — InertMemoryStore returns [])
         registry.register(
-            MemoryRecallTool(store=rt.memory, thread_id_getter=get_active_thread_id)
+            MemoryRecallTool(
+                store=rt.memory,
+                thread_id_getter=get_active_thread_id,
+                thread_store=thread_store,
+            )
         )
 
         # Inject the spawn tool last (it needs the runtime to make new agents).
