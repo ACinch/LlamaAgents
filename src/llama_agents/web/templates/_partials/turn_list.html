@@ -1,0 +1,12 @@
+{% if rows %}
+    {% for r in rows %}
+    <li>
+        <a href="/threads/{{ r.thread_id }}#turn-{{ r.turn_idx }}">
+            {{ r.title }} — turn {{ r.turn_idx }}
+        </a>
+        <span class="muted">{{ r.mtime | age }} ago</span>
+    </li>
+    {% endfor %}
+{% else %}
+    <div class="empty-state">Nothing here</div>
+{% endif %}

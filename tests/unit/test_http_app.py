@@ -94,7 +94,7 @@ def test_http_serialize_reviewer_verdict():
     assert data["feedback"] == "missing tool"
 
 
-@pytest.mark.skip(reason="rewritten in Task 13")
+@pytest.mark.skip(reason="queue worker uses thread store; updated in Task 16")
 @pytest.mark.asyncio
 async def test_lifespan_starts_queue_worker_when_enabled(tmp_path: Path):
     from asgi_lifespan import LifespanManager
@@ -124,7 +124,7 @@ async def test_lifespan_starts_queue_worker_when_enabled(tmp_path: Path):
             assert (tmp_path / "q" / "done" / "hi.md").read_text() == "ok"
 
 
-@pytest.mark.skip(reason="rewritten in Task 13")
+@pytest.mark.skip(reason="queue worker uses thread store; updated in Task 16")
 @pytest.mark.asyncio
 async def test_lifespan_resolves_relative_queue_root_against_sandbox(tmp_path: Path):
     """Regression test for I3: relative cfg.queue.root must be resolved

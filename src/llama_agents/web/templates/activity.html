@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Llama Agents — Dashboard{% endblock %}
+{% block title %}Llama Agents — Activity{% endblock %}
 {% block content %}
 
 <div class="row-2">
@@ -71,7 +71,7 @@
 {# ---------- Bucket panels ---------- #}
 <div class="row-2">
     {% for bucket in [
-        {"id": "inbox",      "label": "Inbox",      "cls": "bucket-inbox"},
+        {"id": "queued",     "label": "Inbox",      "cls": "bucket-inbox"},
         {"id": "processing", "label": "Processing", "cls": "bucket-processing"},
         {"id": "done",       "label": "Done",       "cls": "bucket-done"},
         {"id": "failed",     "label": "Failed",     "cls": "bucket-failed"},
@@ -79,7 +79,7 @@
     <div class="card" data-bucket="{{ bucket.id }}">
         <h2 class="with-icon">
             <span class="bucket-icon {{ bucket.cls }}">
-                {% if bucket.id == "inbox" %}
+                {% if bucket.id == "queued" %}
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
                          stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/>

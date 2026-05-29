@@ -15,6 +15,10 @@ from fastapi.templating import Jinja2Templates
 from markupsafe import escape as _esc
 
 from ..config import Config
+from ..thread.ids import validate_thread_id
+from ..thread.meta import read_meta
+from ..thread.status import read_status
+from ..thread.store import ThreadStore
 
 _WEB_DIR = Path(__file__).parent
 
@@ -149,14 +153,7 @@ def _age(mtime: float) -> str:
     return f"{int(delta // 86400)}d"
 
 
-_VALID_STATUSES = ("inbox", "processing", "done", "failed")
-
-
-@dataclass
-class _JobEntry:
-    name: str
-    mtime: float
-
+_VALID_STATUSES = ("queued", "processing", "done", "failed")
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -173,26 +170,42 @@ def _validate_name(name: str, accepted_exts: list[str]) -> str | None:
     return name
 
 
-def _list_jobs(root: Path, status: str, *, limit: int | None = None) -> list[_JobEntry]:
+def _list_turns(
+    thread_store: ThreadStore, status: str, *, limit: int | None = None
+) -> list[dict]:
+    """Find turns across all threads matching the given status."""
     if status not in _VALID_STATUSES:
         raise HTTPException(status_code=404, detail="unknown status")
-    dir_ = root / status
-    if not dir_.is_dir():
+    rows: list[dict] = []
+    root = thread_store.root
+    if not root.is_dir():
         return []
-    rows: list[_JobEntry] = []
-    for p in dir_.iterdir():
-        if not p.is_file():
+    for thread_dir in root.iterdir():
+        if not thread_dir.is_dir():
             continue
-        if p.suffix != ".md" or p.stem.endswith(".prompt"):
+        turns_dir = thread_dir / "turns"
+        if not turns_dir.is_dir():
             continue
         try:
-            mtime = p.stat().st_mtime
-        except FileNotFoundError:
-            # Worker moved/removed the file between iterdir and stat;
-            # skip rather than 500.
+            meta = read_meta(root, thread_dir.name)
+        except (FileNotFoundError, ValueError):
             continue
-        rows.append(_JobEntry(name=p.name, mtime=mtime))
-    rows.sort(key=lambda r: r.mtime, reverse=True)
+        for turn_dir in turns_dir.iterdir():
+            if not turn_dir.is_dir() or not turn_dir.name.isdigit():
+                continue
+            if read_status(turn_dir) != status:
+                continue
+            try:
+                mtime = (turn_dir / "status").stat().st_mtime
+            except FileNotFoundError:
+                continue
+            rows.append({
+                "thread_id": thread_dir.name,
+                "turn_idx": int(turn_dir.name),
+                "title": meta.title,
+                "mtime": mtime,
+            })
+    rows.sort(key=lambda r: r["mtime"], reverse=True)
     if limit is not None:
         rows = rows[:limit]
     return rows
@@ -284,6 +297,9 @@ def register_routes(
 
     repo_root = config_path.parent
 
+    threads_root = Path(cfg.queue.root) / "threads"
+    thread_store = ThreadStore(threads_root)
+
     app.mount(
         "/static",
         StaticFiles(directory=str(_WEB_DIR / "static")),
@@ -291,19 +307,64 @@ def register_routes(
     )
 
     @app.get("/", response_class=HTMLResponse)
-    async def dashboard(request: Request):
+    async def root_redirect():
+        return RedirectResponse(url="/activity", status_code=302)
+
+    @app.get("/activity", response_class=HTMLResponse)
+    async def activity(request: Request):
         return templates.TemplateResponse(
-            request, "dashboard.html",
-            {"presets": _load_presets(repo_root), "active": "dashboard"},
+            request, "activity.html",
+            {"presets": _load_presets(repo_root), "active": "activity"},
+        )
+
+    @app.get("/threads", response_class=HTMLResponse)
+    async def threads_index(request: Request):
+        return templates.TemplateResponse(
+            request, "threads.html",
+            {"threads": thread_store.list_threads(limit=200),
+             "active": "threads"},
+        )
+
+    @app.get("/threads/{thread_id}", response_class=HTMLResponse)
+    async def thread_detail(request: Request, thread_id: str):
+        if not validate_thread_id(thread_id):
+            raise HTTPException(status_code=404, detail="invalid thread id")
+        try:
+            meta = read_meta(threads_root, thread_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="thread not found")
+        turns = []
+        for n in range(1, meta.current_turn + 1):
+            td = thread_store.turn_dir(thread_id, n)
+            if not td.is_dir():
+                continue
+            prompt = (td / "prompt.md").read_text(encoding="utf-8") \
+                if (td / "prompt.md").is_file() else ""
+            result = (td / "result.md").read_text(encoding="utf-8") \
+                if (td / "result.md").is_file() else ""
+            error = (td / "error.txt").read_text(encoding="utf-8") \
+                if (td / "error.txt").is_file() else ""
+            events = _read_events(td / "events.jsonl")
+            turns.append({
+                "idx": n, "status": read_status(td) or "unknown",
+                "prompt": prompt, "result": result,
+                "error": error, "events": events,
+            })
+        latest_status = turns[-1]["status"] if turns else ""
+        can_continue = latest_status in ("done", "failed")
+        return templates.TemplateResponse(
+            request, "thread.html",
+            {"thread": meta, "turns": turns,
+             "can_continue": can_continue, "active": "threads"},
         )
 
     @app.get("/api/jobs/{status}", response_class=HTMLResponse)
     async def jobs_partial(request: Request, status: str):
         limit = 50 if status in ("done", "failed") else None
-        rows = _list_jobs(Path(cfg.queue.root), status, limit=limit)
+        rows = _list_turns(thread_store, status, limit=limit)
         return templates.TemplateResponse(
-            request, "_partials/job_list.html",
-            {"status": status, "jobs": rows},
+            request, "_partials/turn_list.html",
+            {"status": status, "rows": rows},
         )
 
     @app.post("/api/submit")
@@ -344,49 +405,7 @@ def register_routes(
         tmp = inbox / f".{name}.partial"
         tmp.write_text(content, encoding="utf-8")
         os.replace(tmp, target)
-        return RedirectResponse(url="/", status_code=303)
-
-    @app.get("/jobs/{status}/{name}", response_class=HTMLResponse)
-    async def job_detail(request: Request, status: str, name: str):
-        if status not in _VALID_STATUSES:
-            raise HTTPException(status_code=404, detail="unknown status")
-        if not _SAFE_NAME.match(name) or not name.endswith(".md"):
-            raise HTTPException(status_code=404, detail="invalid name")
-        root = Path(cfg.queue.root)
-        main = root / status / name
-        if not main.is_file():
-            raise HTTPException(status_code=404, detail="job not found")
-
-        if status in ("inbox", "processing"):
-            prompt_text = main.read_text(encoding="utf-8")
-            result_text = ""
-        else:
-            prompt_sidecar = main.with_suffix(".prompt.md")
-            prompt_text = (
-                prompt_sidecar.read_text(encoding="utf-8")
-                if prompt_sidecar.is_file() else ""
-            )
-            result_text = main.read_text(encoding="utf-8")
-
-        events = _read_events(main.with_suffix(".events.jsonl"))
-        error_text = ""
-        if status == "failed":
-            err = main.with_suffix(".error.txt")
-            if err.is_file():
-                error_text = err.read_text(encoding="utf-8")
-
-        return templates.TemplateResponse(
-            request, "job.html",
-            {
-                "status": status,
-                "name": name,
-                "prompt": prompt_text,
-                "events": events,
-                "result": result_text,
-                "error": error_text,
-                "active": "dashboard",
-            },
-        )
+        return RedirectResponse(url="/activity", status_code=303)
 
     @app.get("/config", response_class=HTMLResponse)
     async def config_view(request: Request):

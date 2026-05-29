@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Llama Agents — {{ thread.title }}{% endblock %}
+{% block content %}
+<p><a href="/threads" class="back-link">← Threads</a></p>
+<div class="page-header">
+    <h1 id="thread-title" contenteditable="true"
+        data-thread-id="{{ thread.id }}">{{ thread.title }}</h1>
+    {% if thread.parent_thread_id %}
+    <div class="subtitle">
+        Forked from <a href="/threads/{{ thread.parent_thread_id }}">{{ thread.parent_thread_id[:8] }}</a>
+        at turn {{ thread.parent_turn_idx }}
+    </div>
+    {% endif %}
+</div>
+
+{% for turn in turns %}
+<div class="card section" id="turn-{{ turn.idx }}">
+    <h2 class="with-icon">
+        Turn {{ turn.idx }}
+        <span class="muted">— {{ turn.status }}</span>
+        {% if turn.status in ("done", "failed") %}
+        <form method="post" action="/api/threads/{{ thread.id }}/rerun/{{ turn.idx }}"
+              style="margin-left: auto; display: inline;">
+            <button type="submit">⟳ Rerun</button>
+        </form>
+        {% endif %}
+    </h2>
+
+    <h3>Prompt</h3>
+    <pre class="prompt-block">{{ turn.prompt }}</pre>
+
+    {% if turn.events %}
+    <details>
+        <summary>Events ({{ turn.events | length }})</summary>
+        {% for ev in turn.events %}
+            <details class="event">
+                <summary>
+                    <span class="badge {{ ev._color }}">{{ ev.type }}</span>
+                    <span class="muted">{{ ev.ts | fmt_ts }}</span>
+                </summary>
+                <pre>{{ ev._raw }}</pre>
+            </details>
+        {% endfor %}
+    </details>
+    {% endif %}
+
+    {% if turn.result %}
+    <h3>Final answer</h3>
+    <pre class="prompt-block">{{ turn.result }}</pre>
+    {% endif %}
+
+    {% if turn.error %}
+    <h3>Error</h3>
+    <pre class="error-block">{{ turn.error }}</pre>
+    {% endif %}
+</div>
+{% endfor %}
+
+{% if can_continue %}
+<div class="card section">
+    <h2>Continue</h2>
+    <form method="post" action="/api/threads/{{ thread.id }}/continue">
+        <p><textarea name="body" required placeholder="Your follow-up..."></textarea></p>
+        <p><button type="submit" class="full-btn primary">Send</button></p>
+    </form>
+</div>
+{% else %}
+<div class="card section">
+    <div class="empty-state">Continue available once the current turn finishes.</div>
+</div>
+{% endif %}
+
+<script>
+    // Inline title editor — PATCH /api/threads/{id} on blur
+    (function () {
+        const el = document.getElementById("thread-title");
+        if (!el) return;
+        let original = el.textContent.trim();
+        el.addEventListener("blur", async function () {
+            const cur = el.textContent.trim();
+            if (cur === original || !cur) {
+                el.textContent = original;
+                return;
+            }
+            const r = await fetch("/api/threads/" + el.dataset.threadId, {
+                method: "PATCH",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({"title": cur}),
+            });
+            if (r.ok) {
+                original = cur;
+            } else {
+                el.textContent = original;
+            }
+        });
+    })();
+</script>
+{% endblock %}
