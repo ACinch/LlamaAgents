@@ -391,6 +391,70 @@ async def test_activity_omits_preset_picker_when_no_examples(cfg, config_path):
             assert "preset-picker" not in r.text
 
 
+# ---------- /api/threads/{id}/continue (Task 14) ----------
+
+@pytest.mark.asyncio
+async def test_continue_appends_turn(cfg, config_path):
+    from llama_agents.thread.meta import read_meta
+    threads_root = cfg.queue.root / "threads"
+    threads_root.mkdir(parents=True)
+    store = ThreadStore(threads_root)
+    tid = store.create_thread(title="t")
+    (store.turn_dir(tid, 1) / "prompt.md").write_text("first", encoding="utf-8")
+    set_status(store.turn_dir(tid, 1), "done")
+
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(),
+                     config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.post(f"/api/threads/{tid}/continue",
+                              data={"body": "follow-up"})
+            assert r.status_code in (303, 200)
+    assert (store.turn_dir(tid, 2) / "prompt.md").read_text(encoding="utf-8") == "follow-up"
+    assert (store.turn_dir(tid, 2) / "status").read_text(encoding="utf-8").strip() == "queued"
+
+
+@pytest.mark.asyncio
+async def test_continue_refuses_when_prior_running(cfg, config_path):
+    threads_root = cfg.queue.root / "threads"
+    threads_root.mkdir(parents=True)
+    store = ThreadStore(threads_root)
+    tid = store.create_thread(title="t")
+    (store.turn_dir(tid, 1) / "prompt.md").write_text("first", encoding="utf-8")
+    set_status(store.turn_dir(tid, 1), "processing")
+
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(),
+                     config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.post(f"/api/threads/{tid}/continue",
+                              data={"body": "x"})
+            assert r.status_code == 409
+    # turn 2 was not created
+    assert not (store.turn_dir(tid, 2)).exists()
+
+
+@pytest.mark.asyncio
+async def test_patch_thread_updates_title(cfg, config_path):
+    from llama_agents.thread.meta import read_meta
+    threads_root = cfg.queue.root / "threads"
+    threads_root.mkdir(parents=True)
+    store = ThreadStore(threads_root)
+    tid = store.create_thread(title="original")
+
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(),
+                     config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.patch(f"/api/threads/{tid}",
+                               json={"title": "renamed"})
+            assert r.status_code == 200
+    assert read_meta(threads_root, tid).title == "renamed"
+
+
 # ---------- internal helpers ----------
 
 def test_event_style_includes_reviewer_verdict():

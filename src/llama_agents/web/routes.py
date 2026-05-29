@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -16,8 +16,8 @@ from markupsafe import escape as _esc
 
 from ..config import Config
 from ..thread.ids import validate_thread_id
-from ..thread.meta import read_meta
-from ..thread.status import read_status
+from ..thread.meta import read_meta, update_meta
+from ..thread.status import read_status, set_status
 from ..thread.store import ThreadStore
 
 _WEB_DIR = Path(__file__).parent
@@ -357,6 +357,42 @@ def register_routes(
             {"thread": meta, "turns": turns,
              "can_continue": can_continue, "active": "threads"},
         )
+
+    @app.post("/api/threads/{thread_id}/continue")
+    async def continue_thread(thread_id: str, body: str = Form(...)):
+        if not validate_thread_id(thread_id):
+            raise HTTPException(status_code=404, detail="invalid thread id")
+        try:
+            meta = read_meta(threads_root, thread_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="thread not found")
+        latest_status = read_status(thread_store.turn_dir(thread_id, meta.current_turn))
+        if latest_status in ("queued", "processing"):
+            return PlainTextResponse(
+                f"thread has an active turn (turn {meta.current_turn})",
+                status_code=409,
+            )
+        new_dir, new_idx = thread_store.next_turn_dir(thread_id)
+        (new_dir / "prompt.md").write_text(body, encoding="utf-8")
+        set_status(new_dir, "queued")
+        return RedirectResponse(
+            url=f"/threads/{thread_id}#turn-{new_idx}", status_code=303,
+        )
+
+    @app.patch("/api/threads/{thread_id}")
+    async def patch_thread(thread_id: str, payload: dict = Body(...)):
+        if not validate_thread_id(thread_id):
+            raise HTTPException(status_code=404, detail="invalid thread id")
+        if "title" not in payload:
+            raise HTTPException(status_code=400, detail="title required")
+        title = str(payload["title"]).strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="title cannot be empty")
+        try:
+            update_meta(threads_root, thread_id, title=title)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="thread not found")
+        return {"ok": True, "title": title}
 
     @app.get("/api/jobs/{status}", response_class=HTMLResponse)
     async def jobs_partial(request: Request, status: str):
