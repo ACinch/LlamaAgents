@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from llama_agents.agent import Agent, AgentRunOptions, _ACTIVE_RUN_ID
+from llama_agents.agent import Agent, AgentRunOptions, _ACTIVE_THREAD_ID
 from llama_agents.llama_client import ChatResponse
 from llama_agents.memory.embedder import HashEmbedder
 from llama_agents.memory.store import MemoryStore
@@ -45,7 +45,7 @@ async def test_subagent_returns_summary_and_handle_for_large_output(tmp_path):
     def factory():
         registry = ToolRegistry()
         a = Agent(client=client, registry=registry, memory=store)
-        a._run_id = "rTOP"
+        a._thread_id = "rTOP"
         store.start_run("rTOP")
         return a
 
@@ -58,11 +58,11 @@ async def test_subagent_returns_summary_and_handle_for_large_output(tmp_path):
         inline_threshold_chars=2000,
     )
 
-    token = _ACTIVE_RUN_ID.set("rTOP")
+    token = _ACTIVE_THREAD_ID.set("rTOP")
     try:
         result = await tool.invoke({"task": "describe the universe"})
     finally:
-        _ACTIVE_RUN_ID.reset(token)
+        _ACTIVE_THREAD_ID.reset(token)
     assert "memory_handle" in result
     assert result["memory_handle"]
     assert "summary" in result
@@ -82,7 +82,7 @@ async def test_subagent_returns_inline_for_small_output(tmp_path):
     def factory():
         registry = ToolRegistry()
         a = Agent(client=client, registry=registry, memory=store)
-        a._run_id = "rTOP"
+        a._thread_id = "rTOP"
         store.start_run("rTOP")
         return a
 
@@ -94,11 +94,11 @@ async def test_subagent_returns_inline_for_small_output(tmp_path):
         client_for_summary=client,
         inline_threshold_chars=2000,
     )
-    token = _ACTIVE_RUN_ID.set("rTOP")
+    token = _ACTIVE_THREAD_ID.set("rTOP")
     try:
         result = await tool.invoke({"task": "say hi"})
     finally:
-        _ACTIVE_RUN_ID.reset(token)
+        _ACTIVE_THREAD_ID.reset(token)
     assert result["result"] == "tiny output"
     assert "memory_handle" not in result
     await store.close()

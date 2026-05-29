@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable
 
-from ...agent import Agent, AgentRunOptions, get_active_run_id
+from ...agent import Agent, AgentRunOptions, get_active_thread_id
 from ...errors import AgentLimitExceeded
 from ...events import AssistantChunk, Done, ToolCallResult, ToolCallStart
 from ...memory.store import InertMemoryStore, MemoryStore
@@ -64,7 +64,7 @@ class SpawnSubagentTool(Tool):
         if not acquired:
             raise AgentLimitExceeded("max_concurrent_agents reached")
 
-        parent_rid = get_active_run_id()
+        parent_rid = get_active_thread_id()
         try:
             subagent = self._factory()
             allowed = args.get("allowed_tools")

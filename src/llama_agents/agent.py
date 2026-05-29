@@ -22,13 +22,13 @@ from .events import (
 )
 
 
-_ACTIVE_RUN_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "llama_agents_active_run_id", default=None
+_ACTIVE_THREAD_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "llama_agents_active_thread_id", default=None
 )
 
 
-def get_active_run_id() -> str | None:
-    return _ACTIVE_RUN_ID.get()
+def get_active_thread_id() -> str | None:
+    return _ACTIVE_THREAD_ID.get()
 from .llama_client import ChatResponse
 from .memory.store import InertMemoryStore, MemoryStore
 from .tools.registry import ToolRegistry
@@ -171,7 +171,7 @@ class Agent:
         self._registry = registry
         self._memory = memory or InertMemoryStore()
         self._cancel = asyncio.Event()
-        self._run_id: str | None = None
+        self._thread_id: str | None = None
         self.messages: list[dict[str, Any]] = []
 
     def cancel(self) -> None:
@@ -182,9 +182,9 @@ class Agent:
         run_id: str | None = None,
     ) -> AsyncIterator[Event]:
         import uuid
-        self._run_id = run_id or uuid.uuid4().hex[:24]
-        self._memory.start_run(self._run_id)
-        token = _ACTIVE_RUN_ID.set(self._run_id)
+        self._thread_id = run_id or uuid.uuid4().hex[:24]
+        self._memory.start_run(self._thread_id)
+        token = _ACTIVE_THREAD_ID.set(self._thread_id)
         try:
             effective_prompt = user_prompt
             if self._should_plan(opts):
@@ -254,8 +254,8 @@ class Agent:
 
             yield Done(reason="max_iterations")
         finally:
-            _ACTIVE_RUN_ID.reset(token)
-            await self._memory.end_run(self._run_id)
+            _ACTIVE_THREAD_ID.reset(token)
+            await self._memory.end_run(self._thread_id)
 
     _EST_CHARS_PER_TOKEN: float = 3.5
 
@@ -275,7 +275,7 @@ class Agent:
                 continue
             try:
                 blob_id = await self._memory.store_blob(
-                    kind="evicted_tool", scope="run", thread_id=self._run_id,
+                    kind="evicted_tool", scope="run", thread_id=self._thread_id,
                     title=f"tool result @ msg {i}",
                     body=body,
                     metadata={"tool_call_id": msg.get("tool_call_id")},
@@ -436,7 +436,7 @@ class Agent:
                 try:
                     blob_id = await self._memory.store_plan(
                         task=user_prompt, plan=last_plan,
-                        accepted_attempt=attempt, thread_id=self._run_id,
+                        accepted_attempt=attempt, thread_id=self._thread_id,
                     )
                 except Exception as e:  # noqa: BLE001
                     import sys

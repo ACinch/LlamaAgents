@@ -31,17 +31,17 @@ class MemoryRecallTool(Tool):
         self,
         *,
         store: MemoryStore,
-        run_id_getter: Callable[[], str | None],
+        thread_id_getter: Callable[[], str | None],
     ) -> None:
         self._store = store
-        self._run_id_getter = run_id_getter
+        self._thread_id_getter = thread_id_getter
 
     async def invoke(self, args: dict[str, Any]) -> dict[str, Any]:
-        rid = self._run_id_getter()
+        tid = self._thread_id_getter()
         chunks = await self._store.recall(
             query=args["query"],
             scope="all",
-            thread_ids=[rid] if rid else None,
+            thread_ids=[tid] if tid else None,
             handle=args.get("handle"),
             k=int(args.get("k", 5)),
         )

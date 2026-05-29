@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import Callable, Protocol
 
-from .agent import Agent, get_active_run_id
+from .agent import Agent, get_active_thread_id
 from .config import Config
 from .llama_client import LlamaClient, LlamaServerManager
 from .memory.embedder import FastEmbedEmbedder
@@ -106,7 +106,7 @@ class Runtime:
 
         # memory_recall tool (always available — InertMemoryStore returns [])
         registry.register(
-            MemoryRecallTool(store=rt.memory, run_id_getter=get_active_run_id)
+            MemoryRecallTool(store=rt.memory, thread_id_getter=get_active_thread_id)
         )
 
         # Inject the spawn tool last (it needs the runtime to make new agents).

@@ -14,7 +14,7 @@ async def test_memory_recall_returns_chunks_from_store(tmp_path):
         kind="subagent_output", scope="run", thread_id="r1",
         title="t", body="the quick brown fox jumps over the lazy dog",
     )
-    tool = MemoryRecallTool(store=store, run_id_getter=lambda: "r1")
+    tool = MemoryRecallTool(store=store, thread_id_getter=lambda: "r1")
     res = await tool.invoke({"query": "quick brown fox", "k": 3})
     assert "chunks" in res and len(res["chunks"]) >= 1
     assert res["chunks"][0]["blob_id"] == h
@@ -30,7 +30,7 @@ async def test_memory_recall_with_handle_restricts(tmp_path):
                                 title="a", body="cats love tuna")
     await store.store_blob(kind="user", scope="run", thread_id="r1",
                            title="b", body="dogs love tuna too")
-    tool = MemoryRecallTool(store=store, run_id_getter=lambda: "r1")
+    tool = MemoryRecallTool(store=store, thread_id_getter=lambda: "r1")
     res = await tool.invoke({"query": "tuna", "handle": h1})
     assert all(c["blob_id"] == h1 for c in res["chunks"])
     await store.close()
