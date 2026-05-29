@@ -33,7 +33,7 @@ async def test_queue_e2e_processes_a_job(tmp_path: Path):
     })
 
     rt = await Runtime.create(cfg)
-    worker = JobQueueWorker(rt, cfg.queue)
+    worker = JobQueueWorker(rt, cfg.queue, thread_store=rt.thread_store)
     task = asyncio.create_task(worker.run())
     try:
         ensure_dirs(cfg.queue.root)
