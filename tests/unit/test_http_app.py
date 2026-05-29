@@ -94,10 +94,11 @@ def test_http_serialize_reviewer_verdict():
     assert data["feedback"] == "missing tool"
 
 
-@pytest.mark.skip(reason="queue worker uses thread store; updated in Task 16")
 @pytest.mark.asyncio
 async def test_lifespan_starts_queue_worker_when_enabled(tmp_path: Path):
     from asgi_lifespan import LifespanManager
+    from llama_agents.thread.store import ThreadStore
+    from llama_agents.thread.status import set_status
 
     cfg = Config(
         llama=LlamaConfig(auto_spawn=False),
@@ -112,25 +113,32 @@ async def test_lifespan_starts_queue_worker_when_enabled(tmp_path: Path):
     async with LifespanManager(app) as manager:
         transport = ASGITransport(app=manager.app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
-            # Drop a job, wait for it to land in done/.
-            (tmp_path / "q" / "inbox").mkdir(parents=True, exist_ok=True)
-            (tmp_path / "q" / "inbox" / "hi.md").write_text("hello")
+            # Create a thread with a queued turn
+            threads_root = tmp_path / "q" / "threads"
+            thread_store = ThreadStore(threads_root)
+            tid = thread_store.create_thread(title="test job")
+            turn_dir = thread_store.turn_dir(tid, 1)
+            (turn_dir / "prompt.md").write_text("hello")
+            set_status(turn_dir, "queued")
+            # Wait for the worker to process it (status should become done)
             for _ in range(40):
-                if (tmp_path / "q" / "done" / "hi.md").exists():
-                    break
+                status_file = turn_dir / "status"
+                if status_file.is_file():
+                    status = status_file.read_text(encoding="utf-8").strip()
+                    if status == "done":
+                        break
                 await asyncio.sleep(0.05)
             else:
                 pytest.fail("job never landed in done/")
-            assert (tmp_path / "q" / "done" / "hi.md").read_text() == "ok"
+            assert (turn_dir / "result.md").is_file()
+            assert "ok" in (turn_dir / "result.md").read_text()
 
 
-@pytest.mark.skip(reason="queue worker uses thread store; updated in Task 16")
 @pytest.mark.asyncio
 async def test_lifespan_resolves_relative_queue_root_against_sandbox(tmp_path: Path):
     """Regression test for I3: relative cfg.queue.root must be resolved
     against cfg.sandbox.allowed_dirs[0], not against the process cwd."""
     from asgi_lifespan import LifespanManager
-    from llama_agents.config import MemoryConfig
 
     cfg = Config(
         llama=LlamaConfig(auto_spawn=False),
@@ -146,14 +154,14 @@ async def test_lifespan_resolves_relative_queue_root_against_sandbox(tmp_path: P
     async with LifespanManager(app) as manager:
         transport = ASGITransport(app=manager.app)
         async with AsyncClient(transport=transport, base_url="http://test"):
-            resolved_inbox = tmp_path / ".llama_agents" / "queue" / "inbox"
+            resolved_threads = tmp_path / ".llama_agents" / "queue" / "threads"
             # Wait for the worker's __init__ to have created the folder.
             for _ in range(40):
-                if resolved_inbox.is_dir():
+                if resolved_threads.is_dir():
                     break
                 await asyncio.sleep(0.05)
-            assert resolved_inbox.is_dir(), (
-                f"queue root not resolved against sandbox; expected {resolved_inbox}"
+            assert resolved_threads.is_dir(), (
+                f"queue root not resolved against sandbox; expected {resolved_threads}"
             )
 
 

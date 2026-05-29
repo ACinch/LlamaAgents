@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json as _json
-import os
 import re
 import time
 from dataclasses import dataclass
@@ -456,28 +455,28 @@ def register_routes(
                 )
             content_bytes = await file.read()
             content = content_bytes.decode("utf-8", errors="replace")
+            title = name
         else:
-            raw_name = (filename or "").strip() or f"task-{int(time.time())}.md"
-            name = _validate_name(raw_name, accepted)
-            if name is None:
-                return PlainTextResponse(
-                    f"invalid filename or extension: {raw_name!r}",
-                    status_code=400,
-                )
             content = body or ""
+            if not content.strip():
+                return PlainTextResponse("body required", status_code=400)
+            # Validate filename if provided (but it's only used for the title)
+            raw_filename = (filename or "").strip()
+            if raw_filename:
+                if _validate_name(raw_filename, accepted) is None:
+                    return PlainTextResponse(
+                        f"invalid filename or extension: {raw_filename!r}",
+                        status_code=400,
+                    )
+                title = raw_filename
+            else:
+                title = content.strip().splitlines()[0][:60]
 
-        inbox = Path(cfg.queue.root) / "inbox"
-        inbox.mkdir(parents=True, exist_ok=True)
-        target = inbox / name
-        if target.exists():
-            return PlainTextResponse(
-                f"{name} already exists in inbox; rename and retry",
-                status_code=400,
-            )
-        tmp = inbox / f".{name}.partial"
-        tmp.write_text(content, encoding="utf-8")
-        os.replace(tmp, target)
-        return RedirectResponse(url="/activity", status_code=303)
+        tid = thread_store.create_thread(title=title)
+        turn1 = thread_store.turn_dir(tid, 1)
+        (turn1 / "prompt.md").write_text(content, encoding="utf-8")
+        set_status(turn1, "queued")
+        return RedirectResponse(url=f"/threads/{tid}", status_code=303)
 
     @app.get("/config", response_class=HTMLResponse)
     async def config_view(request: Request):

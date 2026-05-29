@@ -216,10 +216,7 @@ async def test_static_htmx_is_served(cfg, config_path):
 # ---------- /api/submit (Task 16 will wire to thread store) ----------
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="submit writes to legacy inbox/; updated in Task 16")
-async def test_submit_multipart_file_lands_in_inbox(cfg, config_path):
-    for sub in ("inbox", "processing", "done", "failed"):
-        (cfg.queue.root / sub).mkdir(parents=True, exist_ok=True)
+async def test_submit_multipart_file_lands_in_thread(cfg, config_path):
     app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
     async with LifespanManager(app) as manager:
         transport = ASGITransport(app=manager.app)
@@ -227,18 +224,21 @@ async def test_submit_multipart_file_lands_in_inbox(cfg, config_path):
             r = await ac.post(
                 "/api/submit",
                 files={"file": ("hi.md", b"hello world", "text/markdown")},
+                follow_redirects=False,
             )
-            assert r.status_code in (303, 200)
-    landed = cfg.queue.root / "inbox" / "hi.md"
-    assert landed.is_file()
-    assert landed.read_text(encoding="utf-8") == "hello world"
+            assert r.status_code == 303
+            location = r.headers["location"]
+    # Extract thread ID from redirect location
+    tid = location.split("/threads/")[1]
+    threads_root = cfg.queue.root / "threads"
+    turn1 = threads_root / tid / "turns" / "001"
+    assert (turn1 / "prompt.md").is_file()
+    assert (turn1 / "prompt.md").read_text(encoding="utf-8") == "hello world"
+    assert (turn1 / "status").read_text(encoding="utf-8").strip() == "queued"
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="submit writes to legacy inbox/; updated in Task 16")
-async def test_submit_textarea_lands_in_inbox(cfg, config_path):
-    for sub in ("inbox", "processing", "done", "failed"):
-        (cfg.queue.root / sub).mkdir(parents=True, exist_ok=True)
+async def test_submit_textarea_lands_in_thread(cfg, config_path):
     app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
     async with LifespanManager(app) as manager:
         transport = ASGITransport(app=manager.app)
@@ -246,33 +246,45 @@ async def test_submit_textarea_lands_in_inbox(cfg, config_path):
             r = await ac.post(
                 "/api/submit",
                 data={"filename": "t.md", "body": "hello"},
+                follow_redirects=False,
             )
-            assert r.status_code in (303, 200)
-    assert (cfg.queue.root / "inbox" / "t.md").read_text(encoding="utf-8") == "hello"
+            assert r.status_code == 303
+            location = r.headers["location"]
+    # Extract thread ID from redirect location
+    tid = location.split("/threads/")[1]
+    threads_root = cfg.queue.root / "threads"
+    turn1 = threads_root / tid / "turns" / "001"
+    assert (turn1 / "prompt.md").is_file()
+    assert (turn1 / "prompt.md").read_text(encoding="utf-8") == "hello"
+    assert (turn1 / "status").read_text(encoding="utf-8").strip() == "queued"
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="submit writes to legacy inbox/; updated in Task 16")
 async def test_submit_textarea_default_filename(cfg, config_path):
-    import re
-    for sub in ("inbox", "processing", "done", "failed"):
-        (cfg.queue.root / sub).mkdir(parents=True, exist_ok=True)
+    from llama_agents.thread.meta import read_meta
     app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
     async with LifespanManager(app) as manager:
         transport = ASGITransport(app=manager.app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
-            await ac.post("/api/submit", data={"filename": "", "body": "auto"})
-    matches = list((cfg.queue.root / "inbox").glob("task-*.md"))
-    assert len(matches) == 1
-    assert re.match(r"task-\d+\.md", matches[0].name)
-    assert matches[0].read_text(encoding="utf-8") == "auto"
+            r = await ac.post(
+                "/api/submit",
+                data={"filename": "", "body": "auto"},
+                follow_redirects=False,
+            )
+            assert r.status_code == 303
+            location = r.headers["location"]
+    # Extract thread ID from redirect location
+    tid = location.split("/threads/")[1]
+    threads_root = cfg.queue.root / "threads"
+    turn1 = threads_root / tid / "turns" / "001"
+    # Title should be derived from first line of body
+    meta = read_meta(threads_root, tid)
+    assert meta.title == "auto"
+    assert (turn1 / "prompt.md").read_text(encoding="utf-8") == "auto"
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="submit writes to legacy inbox/; updated in Task 16")
 async def test_submit_rejects_bad_extension(cfg, config_path):
-    for sub in ("inbox", "processing", "done", "failed"):
-        (cfg.queue.root / sub).mkdir(parents=True, exist_ok=True)
     app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
     async with LifespanManager(app) as manager:
         transport = ASGITransport(app=manager.app)
@@ -285,10 +297,7 @@ async def test_submit_rejects_bad_extension(cfg, config_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="submit writes to legacy inbox/; updated in Task 16")
 async def test_submit_rejects_path_traversal(cfg, config_path):
-    for sub in ("inbox", "processing", "done", "failed"):
-        (cfg.queue.root / sub).mkdir(parents=True, exist_ok=True)
     app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
     async with LifespanManager(app) as manager:
         transport = ASGITransport(app=manager.app)
@@ -297,6 +306,7 @@ async def test_submit_rejects_path_traversal(cfg, config_path):
                 "/api/submit",
                 data={"filename": "../escape.md", "body": "nope"},
             )
+            assert r.status_code == 400
 
 
 # ---------- /api/threads/{id}/rerun/{turn} (Task 15) ----------
@@ -354,21 +364,33 @@ async def test_rerun_without_edit_reuses_original_prompt(cfg, config_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="submit writes to legacy inbox/; updated in Task 16")
-async def test_submit_rejects_duplicate(cfg, config_path):
-    for sub in ("inbox", "processing", "done", "failed"):
-        (cfg.queue.root / sub).mkdir(parents=True, exist_ok=True)
-    (cfg.queue.root / "inbox" / "dupe.md").write_text("existing")
+async def test_submit_creates_distinct_threads_for_same_filename(cfg, config_path):
+    """Two submits with the same filename should create two different threads."""
     app = create_app(cfg, client_factory=lambda url: _FakeClient(), config_path=config_path)
     async with LifespanManager(app) as manager:
         transport = ASGITransport(app=manager.app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
-            r = await ac.post(
+            r1 = await ac.post(
                 "/api/submit",
-                data={"filename": "dupe.md", "body": "new"},
+                data={"filename": "same.md", "body": "first"},
+                follow_redirects=False,
             )
-            assert r.status_code == 400
-    assert (cfg.queue.root / "inbox" / "dupe.md").read_text(encoding="utf-8") == "existing"
+            assert r1.status_code == 303
+            tid1 = r1.headers["location"].split("/threads/")[1]
+
+            r2 = await ac.post(
+                "/api/submit",
+                data={"filename": "same.md", "body": "second"},
+                follow_redirects=False,
+            )
+            assert r2.status_code == 303
+            tid2 = r2.headers["location"].split("/threads/")[1]
+
+    # Verify two distinct threads were created
+    assert tid1 != tid2
+    threads_root = cfg.queue.root / "threads"
+    assert (threads_root / tid1 / "turns" / "001" / "prompt.md").read_text(encoding="utf-8") == "first"
+    assert (threads_root / tid2 / "turns" / "001" / "prompt.md").read_text(encoding="utf-8") == "second"
 
 
 # ---------- /config ----------
