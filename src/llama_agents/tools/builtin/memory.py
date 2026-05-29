@@ -41,7 +41,7 @@ class MemoryRecallTool(Tool):
         chunks = await self._store.recall(
             query=args["query"],
             scope="all",
-            run_id=rid,
+            thread_ids=[rid] if rid else None,
             handle=args.get("handle"),
             k=int(args.get("k", 5)),
         )

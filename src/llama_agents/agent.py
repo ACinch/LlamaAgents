@@ -275,7 +275,7 @@ class Agent:
                 continue
             try:
                 blob_id = await self._memory.store_blob(
-                    kind="evicted_tool", scope="run", run_id=self._run_id,
+                    kind="evicted_tool", scope="run", thread_id=self._run_id,
                     title=f"tool result @ msg {i}",
                     body=body,
                     metadata={"tool_call_id": msg.get("tool_call_id")},
@@ -436,7 +436,7 @@ class Agent:
                 try:
                     blob_id = await self._memory.store_plan(
                         task=user_prompt, plan=last_plan,
-                        accepted_attempt=attempt, run_id=self._run_id,
+                        accepted_attempt=attempt, thread_id=self._run_id,
                     )
                 except Exception as e:  # noqa: BLE001
                     import sys
@@ -464,7 +464,7 @@ class Agent:
             blob_id = await self._memory.store_plan(
                 task=user_prompt, plan=last_plan,
                 accepted_attempt=opts.max_planning_iterations,
-                run_id=self._run_id,
+                thread_id=self._run_id,
             )
         except Exception as e:  # noqa: BLE001
             import sys

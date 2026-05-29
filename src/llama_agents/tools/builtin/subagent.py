@@ -107,7 +107,7 @@ class SpawnSubagentTool(Tool):
             try:
                 blob_id = await self._memory.store_blob(
                     kind="subagent_output", scope="run",
-                    run_id=parent_rid,
+                    thread_id=parent_rid,
                     title=f"subagent: {args['task'][:60]}",
                     body=final_text,
                     metadata={"task": args["task"], "iterations": iterations,

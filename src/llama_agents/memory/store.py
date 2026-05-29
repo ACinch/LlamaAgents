@@ -35,7 +35,7 @@ class MemoryStore:
         self._chunk_overlap = chunk_overlap
         self._retention_hours = retention_hours
         self._db: VectorDB | None = None
-        self._active_runs: set[str] = set()
+        self._active_threads: set[str] = set()
 
     def _require_db(self) -> VectorDB:
         if self._db is None:
@@ -53,27 +53,27 @@ class MemoryStore:
         self._db = VectorDB(self._root / "index.sqlite", dim=self._embedder.dim)
         await self._db.init()
 
-    def start_run(self, run_id: str) -> None:
-        self._active_runs.add(run_id)
+    def start_run(self, thread_id: str) -> None:
+        self._active_threads.add(thread_id)
 
-    async def end_run(self, run_id: str) -> None:
-        self._active_runs.discard(run_id)
+    async def end_run(self, thread_id: str) -> None:
+        self._active_threads.discard(thread_id)
         if self._retention_hours == 0:
-            await self._purge_run(run_id)
+            await self._purge_thread(thread_id)
         elif self._retention_hours > 0:
             await self.gc_expired()
 
     async def gc_expired(self) -> int:
-        expired = await self._require_db().list_expired_run_ids(
+        expired = await self._require_db().list_expired_thread_ids(
             now_iso=_now_iso(), retention_hours=self._retention_hours
         )
-        for rid in expired:
-            await self._purge_run(rid)
+        for tid in expired:
+            await self._purge_thread(tid)
         return len(expired)
 
-    async def _purge_run(self, run_id: str) -> None:
-        await self._require_db().delete_blobs_for_run(run_id)
-        rd = self._root / "runs" / run_id
+    async def _purge_thread(self, thread_id: str) -> None:
+        await self._require_db().delete_blobs_for_thread(thread_id)
+        rd = self._root / "runs" / thread_id
         if rd.exists():
             shutil.rmtree(rd, ignore_errors=True)
 
@@ -84,14 +84,14 @@ class MemoryStore:
         title: str,
         body: str,
         scope: str = "run",
-        run_id: str | None = None,
+        thread_id: str | None = None,
         metadata: dict | None = None,
     ) -> str:
         blob_id = _new_id()
         if scope == "run":
-            if not run_id:
-                raise ValueError("run_id required for scope='run'")
-            dir_ = self._root / "runs" / run_id
+            if not thread_id:
+                raise ValueError("thread_id required for scope='run'")
+            dir_ = self._root / "runs" / thread_id
         elif scope == "plans":
             dir_ = self._root / "plans"
         else:
@@ -107,7 +107,7 @@ class MemoryStore:
             chunks = [body.strip() or "[empty]"]
         vecs = await self._embedder.embed(chunks)
         meta = BlobMeta(
-            id=blob_id, scope=scope, run_id=run_id if scope == "run" else None,
+            id=blob_id, scope=scope, thread_id=thread_id if scope == "run" else None,
             kind=kind, title=title, file_path=str(fp),
             metadata=metadata or {}, created_at=_now_iso(),
         )
@@ -119,7 +119,7 @@ class MemoryStore:
 
     async def store_plan(
         self, *, task: str, plan: str, accepted_attempt: int,
-        run_id: str | None = None,
+        thread_id: str | None = None,
     ) -> str:
         body = (
             f"# Plan for: {task[:80]}\n\n"
@@ -131,7 +131,7 @@ class MemoryStore:
             kind="plan", scope="plans",
             title=task[:80], body=body,
             metadata={"task": task, "attempt": accepted_attempt,
-                      "run_id": run_id},
+                      "thread_id": thread_id},
         )
 
     async def recall(
@@ -139,14 +139,14 @@ class MemoryStore:
         query: str,
         *,
         scope: str = "all",
-        run_id: str | None = None,
+        thread_ids: list[str] | None = None,
         handle: str | None = None,
         k: int = 5,
         min_score: float | None = None,
     ) -> list[RecalledChunk]:
         [qvec] = await self._embedder.embed([query])
         hits = await self._require_db().search(
-            qvec, scope=scope, run_id=run_id, blob_id=handle, k=k
+            qvec, scope=scope, thread_ids=thread_ids, blob_id=handle, k=k
         )
         out: list[RecalledChunk] = []
         for chunk_id, blob_id, score, text, title, kind, chunk_idx in hits:
@@ -159,9 +159,9 @@ class MemoryStore:
         return out
 
     async def list_handles(
-        self, *, scope: str, run_id: str | None = None
+        self, *, scope: str, thread_id: str | None = None
     ) -> list[BlobMeta]:
-        return await self._require_db().list_blobs(scope=scope, run_id=run_id)
+        return await self._require_db().list_blobs(scope=scope, thread_id=thread_id)
 
     async def close(self) -> None:
         if self._db is not None:
@@ -172,8 +172,8 @@ class InertMemoryStore:
     """No-op store used when memory.enabled = false."""
 
     async def init(self) -> None: ...
-    def start_run(self, run_id: str) -> None: ...
-    async def end_run(self, run_id: str) -> None: ...
+    def start_run(self, thread_id: str) -> None: ...
+    async def end_run(self, thread_id: str) -> None: ...
     async def gc_expired(self) -> int:
         return 0
 

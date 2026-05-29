@@ -189,7 +189,7 @@ class VectorDB:
         query_vec: list[float],
         *,
         scope: str,
-        thread_id: str | None = None,
+        thread_ids: list[str] | None = None,
         blob_id: str | None = None,
         k: int = 5,
     ) -> list[tuple[str, str, float, str, str, str, int]]:
@@ -210,18 +210,20 @@ class VectorDB:
             else:
                 if scope == "run":
                     sql += " AND b.scope = 'run'"
-                    if thread_id is not None:
-                        sql += " AND b.thread_id = ?"
-                        params.append(thread_id)
+                    if thread_ids:
+                        placeholders = ",".join("?" for _ in thread_ids)
+                        sql += f" AND b.thread_id IN ({placeholders})"
+                        params.extend(thread_ids)
                 elif scope == "plans":
                     sql += " AND b.scope = 'plans'"
                 elif scope == "all":
-                    if thread_id is not None:
+                    if thread_ids:
+                        placeholders = ",".join("?" for _ in thread_ids)
                         sql += (
-                            " AND (b.scope = 'plans' OR "
-                            "(b.scope = 'run' AND b.thread_id = ?))"
+                            f" AND (b.scope = 'plans' OR "
+                            f"(b.scope = 'run' AND b.thread_id IN ({placeholders})))"
                         )
-                        params.append(thread_id)
+                        params.extend(thread_ids)
                     else:
                         sql += " AND b.scope = 'plans'"
             rows = self._conn.execute(sql, params).fetchall()

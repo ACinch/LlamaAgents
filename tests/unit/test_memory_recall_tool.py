@@ -11,7 +11,7 @@ async def test_memory_recall_returns_chunks_from_store(tmp_path):
     await store.init()
     store.start_run("r1")
     h = await store.store_blob(
-        kind="subagent_output", scope="run", run_id="r1",
+        kind="subagent_output", scope="run", thread_id="r1",
         title="t", body="the quick brown fox jumps over the lazy dog",
     )
     tool = MemoryRecallTool(store=store, run_id_getter=lambda: "r1")
@@ -26,9 +26,9 @@ async def test_memory_recall_with_handle_restricts(tmp_path):
     store = MemoryStore(root=tmp_path, embedder=HashEmbedder(dim=32))
     await store.init()
     store.start_run("r1")
-    h1 = await store.store_blob(kind="user", scope="run", run_id="r1",
+    h1 = await store.store_blob(kind="user", scope="run", thread_id="r1",
                                 title="a", body="cats love tuna")
-    await store.store_blob(kind="user", scope="run", run_id="r1",
+    await store.store_blob(kind="user", scope="run", thread_id="r1",
                            title="b", body="dogs love tuna too")
     tool = MemoryRecallTool(store=store, run_id_getter=lambda: "r1")
     res = await tool.invoke({"query": "tuna", "handle": h1})
