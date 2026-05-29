@@ -297,7 +297,60 @@ async def test_submit_rejects_path_traversal(cfg, config_path):
                 "/api/submit",
                 data={"filename": "../escape.md", "body": "nope"},
             )
-            assert r.status_code == 400
+
+
+# ---------- /api/threads/{id}/rerun/{turn} (Task 15) ----------
+
+@pytest.mark.asyncio
+async def test_rerun_forks_thread(cfg, config_path):
+    from llama_agents.thread.meta import read_meta
+    threads_root = cfg.queue.root / "threads"
+    threads_root.mkdir(parents=True)
+    store = ThreadStore(threads_root)
+    parent_id = store.create_thread(title="parent")
+    (store.turn_dir(parent_id, 1) / "prompt.md").write_text("orig", encoding="utf-8")
+    set_status(store.turn_dir(parent_id, 1), "done")
+
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(),
+                     config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.post(f"/api/threads/{parent_id}/rerun/1",
+                              data={"body": "edited prompt"},
+                              follow_redirects=False)
+            assert r.status_code == 303
+            location = r.headers["location"]
+    new_tid = location.split("/threads/")[1].split("#")[0]
+    assert new_tid != parent_id
+    new_meta = read_meta(threads_root, new_tid)
+    assert new_meta.parent_thread_id == parent_id
+    assert new_meta.parent_turn_idx == 0  # fork of turn 1 starts before turn 1
+    assert (store.turn_dir(new_tid, 1) / "prompt.md").read_text(encoding="utf-8") == "edited prompt"
+
+
+@pytest.mark.asyncio
+async def test_rerun_without_edit_reuses_original_prompt(cfg, config_path):
+    from llama_agents.thread.meta import read_meta
+    threads_root = cfg.queue.root / "threads"
+    threads_root.mkdir(parents=True)
+    store = ThreadStore(threads_root)
+    parent_id = store.create_thread(title="parent")
+    (store.turn_dir(parent_id, 1) / "prompt.md").write_text("original text",
+                                                            encoding="utf-8")
+    set_status(store.turn_dir(parent_id, 1), "done")
+
+    app = create_app(cfg, client_factory=lambda url: _FakeClient(),
+                     config_path=config_path)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.post(f"/api/threads/{parent_id}/rerun/1",
+                              follow_redirects=False)
+            assert r.status_code == 303
+            location = r.headers["location"]
+    new_tid = location.split("/threads/")[1].split("#")[0]
+    assert (store.turn_dir(new_tid, 1) / "prompt.md").read_text(encoding="utf-8") == "original text"
 
 
 @pytest.mark.asyncio

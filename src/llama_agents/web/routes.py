@@ -379,6 +379,42 @@ def register_routes(
             url=f"/threads/{thread_id}#turn-{new_idx}", status_code=303,
         )
 
+    @app.post("/api/threads/{thread_id}/rerun/{turn_idx}")
+    async def rerun_turn(
+        thread_id: str, turn_idx: int,
+        body: str | None = Form(None),
+    ):
+        if not validate_thread_id(thread_id):
+            raise HTTPException(status_code=404, detail="invalid thread id")
+        try:
+            meta = read_meta(threads_root, thread_id)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="thread not found")
+        if turn_idx < 1 or turn_idx > meta.current_turn:
+            raise HTTPException(status_code=404, detail="turn not found")
+        # Read original prompt for fallback
+        orig_path = thread_store.turn_dir(thread_id, turn_idx) / "prompt.md"
+        original_prompt = orig_path.read_text(encoding="utf-8") if orig_path.is_file() else ""
+
+        new_prompt = (body or "").strip() or original_prompt
+        if not new_prompt:
+            raise HTTPException(status_code=400, detail="rerun prompt is empty")
+
+        # Fork: parent_turn_idx = turn_idx - 1 (fork point is BEFORE the
+        # reran turn — so turn 1 inherits no parent messages)
+        new_tid = thread_store.create_thread(
+            title=new_prompt.strip().splitlines()[0][:60] or meta.title,
+            parent_thread_id=thread_id,
+            parent_turn_idx=turn_idx - 1,
+        )
+        (thread_store.turn_dir(new_tid, 1) / "prompt.md").write_text(
+            new_prompt, encoding="utf-8",
+        )
+        set_status(thread_store.turn_dir(new_tid, 1), "queued")
+        return RedirectResponse(
+            url=f"/threads/{new_tid}#turn-1", status_code=303,
+        )
+
     @app.patch("/api/threads/{thread_id}")
     async def patch_thread(thread_id: str, payload: dict = Body(...)):
         if not validate_thread_id(thread_id):
