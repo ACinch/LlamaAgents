@@ -11,12 +11,12 @@ from typing import Any, Protocol
 from ..agent import AgentRunOptions
 from ..config import QueueConfig
 from ..events import AssistantChunk, Done, LoopError
-from .paths import (
-    ensure_dirs,
-    move_to_processing,
-    move_to_terminal,
-    sweep_processing_to_inbox,
+from ..thread.migration import migrate_legacy_queue_dirs
+from ..thread.status import (
+    claim_for_processing, revert_processing_on_startup, set_status,
 )
+from ..thread.store import ThreadStore
+from .paths import ensure_dirs
 
 logger = logging.getLogger(__name__)
 
@@ -35,18 +35,27 @@ class JobResult:
     events: list[dict[str, Any]]
     loop_error: LoopError | None
     prompt_text: str
+    new_messages: list[dict] = dataclasses.field(default_factory=list)
 
 
 class JobQueueWorker:
-    """Polls inbox/, runs each job through the agent, writes outputs."""
+    """Polls thread folders, runs each queued turn through the agent."""
 
-    def __init__(self, runtime: _RuntimeLike, cfg: QueueConfig) -> None:
+    def __init__(
+        self,
+        runtime: _RuntimeLike,
+        cfg: QueueConfig,
+        *,
+        thread_store: ThreadStore,
+    ) -> None:
         self._rt = runtime
         self._cfg = cfg
+        self._thread_store = thread_store
         self._stop = asyncio.Event()
         self._in_flight: set[asyncio.Task] = set()
         ensure_dirs(cfg.root)
-        sweep_processing_to_inbox(cfg.root)
+        migrate_legacy_queue_dirs(cfg.root)
+        revert_processing_on_startup(cfg.root / "threads")
 
     async def run(self) -> None:
         """Main loop. Returns when `drain` is called."""
@@ -82,36 +91,41 @@ class JobQueueWorker:
             picked = self._pick_one()
             if picked is None:
                 return
-            task = asyncio.create_task(self._run_job(picked))
+            thread_id, turn_idx, turn_dir = picked
+            task = asyncio.create_task(self._run_job(thread_id, turn_idx, turn_dir))
             self._in_flight.add(task)
             task.add_done_callback(self._in_flight.discard)
 
-    def _pick_one(self) -> Path | None:
-        inbox = Path(self._cfg.root) / "inbox"
-        if not inbox.is_dir():
-            return None
-        candidates = sorted(
-            (p for p in inbox.iterdir()
-             if p.is_file() and p.suffix in self._cfg.accepted_extensions),
-            key=lambda p: p.stat().st_mtime,
-        )
-        for src in candidates:
-            moved = move_to_processing(self._cfg.root, src)
-            if moved is not None:
-                logger.info("queue: picked up %s", src.name)
-                return moved
-        return None
+    def _pick_one(self) -> tuple[str, int, Path] | None:
+        """Find the oldest queued turn and atomically claim it.
 
-    async def _run_job(self, path: Path) -> None:
+        Returns (thread_id, turn_idx, turn_dir) on success.
+        """
+        candidate = self._thread_store.next_queued_turn()
+        if candidate is None:
+            return None
+        thread_id, turn_idx = candidate
+        turn_dir = self._thread_store.turn_dir(thread_id, turn_idx)
+        if not claim_for_processing(turn_dir):
+            # Lost the race; try again next poll
+            return None
+        logger.info("queue: picked up %s/turn-%d", thread_id, turn_idx)
+        return thread_id, turn_idx, turn_dir
+
+    async def _run_job(self, thread_id: str, turn_idx: int,
+                       turn_dir: Path) -> None:
         attempt = 0
         while True:
-            logger.info("queue: running %s (attempt %d)", path.name, attempt + 1)
-            result = await self._invoke_agent(path)
+            logger.info(
+                "queue: running %s/turn-%d (attempt %d)",
+                thread_id, turn_idx, attempt + 1,
+            )
+            result = await self._invoke_agent(thread_id, turn_idx, turn_dir)
             if self._should_retry(result, attempt):
                 delay = self._cfg.retry_backoff_seconds * (2 ** attempt)
                 logger.info(
-                    "queue: %s infra error %s — retrying in %.1fs",
-                    path.name,
+                    "queue: %s/turn-%d infra error %s — retrying in %.1fs",
+                    thread_id, turn_idx,
                     result.loop_error.error_type if result.loop_error else "?",
                     delay,
                 )
@@ -121,11 +135,11 @@ class JobQueueWorker:
                     except asyncio.TimeoutError:
                         pass
                 if self._stop.is_set():
-                    # Shutting down — leave file in processing/ for sweep.
                     return
                 attempt += 1
                 continue
-            await self._finalize(path, result, attempt=attempt)
+            await self._finalize(thread_id, turn_idx, turn_dir, result,
+                                 attempt=attempt)
             return
 
     def _should_retry(self, result: JobResult, attempt: int) -> bool:
@@ -135,21 +149,28 @@ class JobQueueWorker:
             return False
         return result.loop_error.error_type in INFRA_ERROR_TYPES
 
-    async def _invoke_agent(self, path: Path) -> JobResult:
-        prompt = path.read_text(encoding="utf-8")
+    async def _invoke_agent(self, thread_id: str, turn_idx: int,
+                            turn_dir: Path) -> JobResult:
+        prompt = (turn_dir / "prompt.md").read_text(encoding="utf-8")
         agent = self._rt.new_agent()
         opts = AgentRunOptions(max_iterations=self._cfg.max_iterations)
+        prior = self._thread_store.read_messages(thread_id)
 
         events: list[dict[str, Any]] = []
         final_chunks: list[str] = []
         loop_error: LoopError | None = None
-        async for ev in agent.run(prompt, opts):
+        async for ev in agent.run(prompt, opts, thread_id=thread_id,
+                                  prior_messages=prior):
             events.append(_serialize_event(ev))
             if isinstance(ev, AssistantChunk):
                 final_chunks.append(ev.text)
             elif isinstance(ev, LoopError):
                 loop_error = ev
 
+        # The agent appends to its own self.messages; capture only the new
+        # tail beyond `prior`.
+        tail_start = 1 + len(prior) + 1  # [system, *prior, user]
+        new_messages = list(agent.messages[tail_start:])
         success = loop_error is None
         return JobResult(
             success=success,
@@ -157,31 +178,37 @@ class JobQueueWorker:
             events=events,
             loop_error=loop_error,
             prompt_text=prompt,
+            new_messages=new_messages,
         )
 
-    async def _finalize(
-        self, path: Path, result: JobResult, attempt: int
-    ) -> None:
-        status = "done" if result.success else "failed"
-        dst = move_to_terminal(self._cfg.root, path, status=status)
-        dst.write_text(result.final_text, encoding="utf-8")
-        events_path = dst.with_suffix(".events.jsonl")
-        events_path.write_text(
+    async def _finalize(self, thread_id: str, turn_idx: int,
+                        turn_dir: Path, result: JobResult,
+                        attempt: int) -> None:
+        # Write side-cars BEFORE flipping status, so readers polling the
+        # turn page never see a done turn with a missing result.md.
+        (turn_dir / "result.md").write_text(result.final_text, encoding="utf-8")
+        (turn_dir / "events.jsonl").write_text(
             "\n".join(json.dumps(e) for e in result.events) + "\n",
             encoding="utf-8",
         )
-        prompt_path = dst.with_suffix(".prompt.md")
-        prompt_path.write_text(result.prompt_text, encoding="utf-8")
+        # Append the new agent messages to the thread's messages.jsonl,
+        # including the seed user turn we don't already have on disk.
+        seed_user = {"role": "user", "content": result.prompt_text}
+        self._thread_store.append_messages(
+            thread_id, [seed_user, *result.new_messages]
+        )
+
+        status = "done" if result.success else "failed"
         if not result.success:
-            err_path = dst.with_suffix(".error.txt")
             err = result.loop_error
-            err_path.write_text(
+            (turn_dir / "error.txt").write_text(
                 f"attempts: {attempt + 1}\n"
                 f"error_type: {err.error_type if err else 'Unknown'}\n"
                 f"message: {err.message if err else 'no LoopError captured'}\n",
                 encoding="utf-8",
             )
-        logger.info("queue: %s -> %s", path.name, status)
+        set_status(turn_dir, status)
+        logger.info("queue: %s/turn-%d -> %s", thread_id, turn_idx, status)
 
 
 def _serialize_event(ev: Any) -> dict[str, Any]:

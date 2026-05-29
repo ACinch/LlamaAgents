@@ -10,6 +10,8 @@ from llama_agents.config import QueueConfig
 from llama_agents.llama_client import ChatResponse, ToolCall
 from llama_agents.queue.paths import ensure_dirs
 from llama_agents.queue.worker import JobQueueWorker
+from llama_agents.thread.status import read_status, set_status
+from llama_agents.thread.store import ThreadStore
 from llama_agents.tools.registry import ToolRegistry
 
 
@@ -37,11 +39,21 @@ class _ErroringClient:
 class _StubRuntime:
     """Minimal runtime: hands out fresh Agents with a scripted client."""
 
-    def __init__(self, client_factory):
+    def __init__(self, client_factory, thread_store: ThreadStore):
         self._client_factory = client_factory
+        self.thread_store = thread_store
 
     def new_agent(self) -> Agent:
         return Agent(client=self._client_factory(), registry=ToolRegistry())
+
+
+def _stage_queued_turn(store: ThreadStore, prompt: str) -> tuple[str, int]:
+    """Create a one-turn thread with status=queued. Returns (thread_id, turn_idx)."""
+    tid = store.create_thread(title=prompt[:60] or "untitled")
+    td = store.turn_dir(tid, 1)
+    (td / "prompt.md").write_text(prompt, encoding="utf-8")
+    set_status(td, "queued")
+    return tid, 1
 
 
 @pytest.fixture
@@ -69,16 +81,18 @@ async def _wait_until(predicate, timeout=2.0):
 
 
 @pytest.mark.asyncio
-async def test_happy_path_moves_inbox_to_done_with_outputs(queue_cfg, tmp_path):
+async def test_happy_path_writes_result_and_events(queue_cfg, tmp_path):
     ensure_dirs(queue_cfg.root)
-    (tmp_path / "inbox" / "foo.md").write_text("say hello")
+    store = ThreadStore(queue_cfg.root / "threads")
+    tid, _ = _stage_queued_turn(store, "say hello")
+    turn_dir = store.turn_dir(tid, 1)
 
-    rt = _StubRuntime(lambda: _ScriptedClient(ChatResponse(content="hi there")))
-    worker = JobQueueWorker(rt, queue_cfg)
+    rt = _StubRuntime(lambda: _ScriptedClient(ChatResponse(content="hi there")), store)
+    worker = JobQueueWorker(rt, queue_cfg, thread_store=store)
     task = asyncio.create_task(worker.run())
     try:
-        ok = await _wait_until(lambda: (tmp_path / "done" / "foo.md").exists())
-        assert ok, "job never landed in done/"
+        ok = await _wait_until(lambda: (turn_dir / "result.md").exists())
+        assert ok, "job never wrote result.md"
     finally:
         await worker.drain(timeout=1.0)
         task.cancel()
@@ -87,40 +101,13 @@ async def test_happy_path_moves_inbox_to_done_with_outputs(queue_cfg, tmp_path):
         except asyncio.CancelledError:
             pass
 
-    assert (tmp_path / "done" / "foo.md").read_text() == "hi there"
-    events_path = tmp_path / "done" / "foo.events.jsonl"
+    assert (turn_dir / "result.md").read_text(encoding="utf-8") == "hi there"
+    events_path = turn_dir / "events.jsonl"
     assert events_path.exists()
     lines = events_path.read_text().splitlines()
     types = [json.loads(line)["type"] for line in lines]
     assert "Done" in types
-    assert not (tmp_path / "inbox" / "foo.md").exists()
-    assert not (tmp_path / "processing" / "foo.md").exists()
-
-
-@pytest.mark.asyncio
-async def test_ignored_extensions_are_skipped(queue_cfg, tmp_path):
-    ensure_dirs(queue_cfg.root)
-    (tmp_path / "inbox" / "skip.tmp").write_text("ignore me")
-    (tmp_path / "inbox" / "take.md").write_text("do it")
-
-    rt = _StubRuntime(lambda: _ScriptedClient(ChatResponse(content="ok")))
-    worker = JobQueueWorker(rt, queue_cfg)
-    task = asyncio.create_task(worker.run())
-    try:
-        ok = await _wait_until(lambda: (tmp_path / "done" / "take.md").exists())
-        assert ok
-    finally:
-        await worker.drain(timeout=1.0)
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-    # The .tmp file is still in inbox, untouched.
-    assert (tmp_path / "inbox" / "skip.tmp").exists()
-    assert not (tmp_path / "processing" / "skip.tmp").exists()
-    assert not (tmp_path / "done" / "skip.tmp").exists()
+    assert read_status(turn_dir) == "done"
 
 
 @pytest.mark.asyncio
@@ -128,13 +115,15 @@ async def test_non_infra_error_lands_in_failed(queue_cfg, tmp_path):
     from llama_agents.errors import LlamaProtocolError
 
     ensure_dirs(queue_cfg.root)
-    (tmp_path / "inbox" / "boom.md").write_text("trigger")
+    store = ThreadStore(queue_cfg.root / "threads")
+    tid, _ = _stage_queued_turn(store, "trigger")
+    turn_dir = store.turn_dir(tid, 1)
 
-    rt = _StubRuntime(lambda: _ErroringClient(LlamaProtocolError("bad shape")))
-    worker = JobQueueWorker(rt, queue_cfg)
+    rt = _StubRuntime(lambda: _ErroringClient(LlamaProtocolError("bad shape")), store)
+    worker = JobQueueWorker(rt, queue_cfg, thread_store=store)
     task = asyncio.create_task(worker.run())
     try:
-        ok = await _wait_until(lambda: (tmp_path / "failed" / "boom.md").exists())
+        ok = await _wait_until(lambda: read_status(turn_dir) == "failed")
         assert ok
     finally:
         await worker.drain(timeout=1.0)
@@ -144,10 +133,10 @@ async def test_non_infra_error_lands_in_failed(queue_cfg, tmp_path):
         except asyncio.CancelledError:
             pass
 
-    err_text = (tmp_path / "failed" / "boom.error.txt").read_text()
+    err_text = (turn_dir / "error.txt").read_text()
     assert "LlamaProtocolError" in err_text
     assert "bad shape" in err_text
-    assert (tmp_path / "failed" / "boom.events.jsonl").exists()
+    assert (turn_dir / "events.jsonl").exists()
 
 
 class _FlakyClient:
@@ -177,7 +166,9 @@ async def test_infra_error_retries_then_succeeds(tmp_path):
         max_iterations=5, drain_timeout_seconds=2.0,
     )
     ensure_dirs(cfg.root)
-    (tmp_path / "inbox" / "retry.md").write_text("go")
+    store = ThreadStore(cfg.root / "threads")
+    tid, _ = _stage_queued_turn(store, "go")
+    turn_dir = store.turn_dir(tid, 1)
 
     # Share a single client across new_agent() calls so .calls accumulates.
     flaky = _FlakyClient(
@@ -185,12 +176,12 @@ async def test_infra_error_retries_then_succeeds(tmp_path):
         fail_times=1,
         success_response=ChatResponse(content="finally"),
     )
-    rt = _StubRuntime(lambda: flaky)
-    worker = JobQueueWorker(rt, cfg)
+    rt = _StubRuntime(lambda: flaky, store)
+    worker = JobQueueWorker(rt, cfg, thread_store=store)
     task = asyncio.create_task(worker.run())
     try:
         ok = await _wait_until(
-            lambda: (tmp_path / "done" / "retry.md").exists(), timeout=3.0
+            lambda: read_status(turn_dir) == "done", timeout=3.0
         )
         assert ok
     finally:
@@ -201,7 +192,7 @@ async def test_infra_error_retries_then_succeeds(tmp_path):
         except asyncio.CancelledError:
             pass
 
-    assert (tmp_path / "done" / "retry.md").read_text() == "finally"
+    assert (turn_dir / "result.md").read_text(encoding="utf-8") == "finally"
     assert flaky.calls == 2
 
 
@@ -216,14 +207,16 @@ async def test_infra_error_terminates_after_max_retries(tmp_path):
         max_iterations=5, drain_timeout_seconds=2.0,
     )
     ensure_dirs(cfg.root)
-    (tmp_path / "inbox" / "dead.md").write_text("go")
+    store = ThreadStore(cfg.root / "threads")
+    tid, _ = _stage_queued_turn(store, "go")
+    turn_dir = store.turn_dir(tid, 1)
 
-    rt = _StubRuntime(lambda: _ErroringClient(LlamaUnreachable("nope")))
-    worker = JobQueueWorker(rt, cfg)
+    rt = _StubRuntime(lambda: _ErroringClient(LlamaUnreachable("nope")), store)
+    worker = JobQueueWorker(rt, cfg, thread_store=store)
     task = asyncio.create_task(worker.run())
     try:
         ok = await _wait_until(
-            lambda: (tmp_path / "failed" / "dead.md").exists(), timeout=3.0
+            lambda: read_status(turn_dir) == "failed", timeout=3.0
         )
         assert ok
     finally:
@@ -234,7 +227,7 @@ async def test_infra_error_terminates_after_max_retries(tmp_path):
         except asyncio.CancelledError:
             pass
 
-    err = (tmp_path / "failed" / "dead.error.txt").read_text()
+    err = (turn_dir / "error.txt").read_text()
     assert "attempts: 2" in err  # initial + 1 retry
     assert "LlamaUnreachable" in err
 
@@ -252,13 +245,15 @@ class _ToolLoopClient:
 @pytest.mark.asyncio
 async def test_max_iterations_counts_as_success(queue_cfg, tmp_path):
     ensure_dirs(queue_cfg.root)
-    (tmp_path / "inbox" / "loop.md").write_text("loop forever")
+    store = ThreadStore(queue_cfg.root / "threads")
+    tid, _ = _stage_queued_turn(store, "loop forever")
+    turn_dir = store.turn_dir(tid, 1)
 
-    rt = _StubRuntime(lambda: _ToolLoopClient())
-    worker = JobQueueWorker(rt, queue_cfg)
+    rt = _StubRuntime(lambda: _ToolLoopClient(), store)
+    worker = JobQueueWorker(rt, queue_cfg, thread_store=store)
     task = asyncio.create_task(worker.run())
     try:
-        ok = await _wait_until(lambda: (tmp_path / "done" / "loop.md").exists())
+        ok = await _wait_until(lambda: read_status(turn_dir) == "done")
         assert ok
     finally:
         await worker.drain(timeout=1.0)
@@ -268,11 +263,10 @@ async def test_max_iterations_counts_as_success(queue_cfg, tmp_path):
         except asyncio.CancelledError:
             pass
 
-    assert (tmp_path / "done" / "loop.md").read_text() == "[no final answer]"
+    assert (turn_dir / "result.md").read_text(encoding="utf-8") == "[no final answer]"
     types = [
         json.loads(l)["type"]
-        for l in (tmp_path / "done" / "loop.events.jsonl")
-        .read_text().splitlines()
+        for l in (turn_dir / "events.jsonl").read_text().splitlines()
     ]
     assert "Done" in types
 
@@ -298,11 +292,14 @@ async def test_concurrency_cap_is_respected(tmp_path):
         max_iterations=5, drain_timeout_seconds=5.0,
     )
     ensure_dirs(cfg.root)
-    for name in ("a.md", "b.md", "c.md"):
-        (tmp_path / "inbox" / name).write_text("go")
+    store = ThreadStore(cfg.root / "threads")
+    turn_dirs = []
+    for i in range(3):
+        tid, _ = _stage_queued_turn(store, f"go {i}")
+        turn_dirs.append(store.turn_dir(tid, 1))
 
-    rt = _StubRuntime(lambda: _SlowClient(0.3, ChatResponse(content="ok")))
-    worker = JobQueueWorker(rt, cfg)
+    rt = _StubRuntime(lambda: _SlowClient(0.3, ChatResponse(content="ok")), store)
+    worker = JobQueueWorker(rt, cfg, thread_store=store)
     task = asyncio.create_task(worker.run())
 
     observed: list[int] = []
@@ -312,7 +309,7 @@ async def test_concurrency_cap_is_respected(tmp_path):
             observed.append(len(worker._in_flight))  # noqa: SLF001
             await asyncio.sleep(0.05)
         ok = await _wait_until(
-            lambda: all((tmp_path / "done" / n).exists() for n in ("a.md", "b.md", "c.md")),
+            lambda: all(read_status(td) == "done" for td in turn_dirs),
             timeout=5.0,
         )
         assert ok
@@ -338,7 +335,7 @@ class _BlockingClient:
 
 
 @pytest.mark.asyncio
-async def test_drain_cancels_in_flight_and_leaves_file_in_processing(tmp_path):
+async def test_drain_cancels_in_flight_and_leaves_turn_processing(tmp_path):
     cfg = QueueConfig(
         enabled=True, root=tmp_path,
         poll_interval_seconds=0.02, max_concurrent=1,
@@ -346,14 +343,16 @@ async def test_drain_cancels_in_flight_and_leaves_file_in_processing(tmp_path):
         max_iterations=5, drain_timeout_seconds=0.1,
     )
     ensure_dirs(cfg.root)
-    (tmp_path / "inbox" / "stuck.md").write_text("never returns")
+    store = ThreadStore(cfg.root / "threads")
+    tid, _ = _stage_queued_turn(store, "never returns")
+    turn_dir = store.turn_dir(tid, 1)
 
-    rt = _StubRuntime(lambda: _BlockingClient())
-    worker = JobQueueWorker(rt, cfg)
+    rt = _StubRuntime(lambda: _BlockingClient(), store)
+    worker = JobQueueWorker(rt, cfg, thread_store=store)
     task = asyncio.create_task(worker.run())
     try:
         ok = await _wait_until(
-            lambda: (tmp_path / "processing" / "stuck.md").exists(),
+            lambda: read_status(turn_dir) == "processing",
             timeout=1.0,
         )
         assert ok
@@ -365,14 +364,15 @@ async def test_drain_cancels_in_flight_and_leaves_file_in_processing(tmp_path):
         except asyncio.CancelledError:
             pass
 
-    # File remains in processing/, NOT in done/ or failed/.
-    assert (tmp_path / "processing" / "stuck.md").exists()
-    assert not (tmp_path / "done" / "stuck.md").exists()
-    assert not (tmp_path / "failed" / "stuck.md").exists()
+    # Turn remains in processing, NOT done or failed.
+    assert read_status(turn_dir) == "processing"
+    assert not (turn_dir / "result.md").exists()
 
 
 @pytest.mark.asyncio
-async def test_new_worker_sweeps_processing_back_into_inbox(tmp_path):
+async def test_new_worker_reverts_processing_turns_to_queued(tmp_path):
+    """On startup, any turn left in 'processing' (from a prior crash) is
+    reverted to 'queued' so it can be picked up again."""
     cfg = QueueConfig(
         enabled=True, root=tmp_path,
         poll_interval_seconds=0.05, max_concurrent=1,
@@ -380,15 +380,19 @@ async def test_new_worker_sweeps_processing_back_into_inbox(tmp_path):
         max_iterations=5, drain_timeout_seconds=2.0,
     )
     ensure_dirs(cfg.root)
-    # Simulate a prior crash: a file left in processing/.
-    (tmp_path / "processing" / "recovered.md").write_text("was stuck")
+    store = ThreadStore(cfg.root / "threads")
+    # Stage a turn but manually set status to "processing" (simulating a crash).
+    tid = store.create_thread(title="was stuck")
+    td = store.turn_dir(tid, 1)
+    (td / "prompt.md").write_text("was stuck", encoding="utf-8")
+    set_status(td, "processing")
 
-    rt = _StubRuntime(lambda: _ScriptedClient(ChatResponse(content="done now")))
-    worker = JobQueueWorker(rt, cfg)
+    rt = _StubRuntime(lambda: _ScriptedClient(ChatResponse(content="done now")), store)
+    worker = JobQueueWorker(rt, cfg, thread_store=store)
     task = asyncio.create_task(worker.run())
     try:
         ok = await _wait_until(
-            lambda: (tmp_path / "done" / "recovered.md").exists(),
+            lambda: read_status(td) == "done",
             timeout=2.0,
         )
         assert ok
@@ -400,20 +404,43 @@ async def test_new_worker_sweeps_processing_back_into_inbox(tmp_path):
         except asyncio.CancelledError:
             pass
 
-    assert (tmp_path / "done" / "recovered.md").read_text() == "done now"
+    assert (td / "result.md").read_text(encoding="utf-8") == "done now"
 
 
 @pytest.mark.asyncio
-async def test_finalize_writes_prompt_sidecar_to_done(queue_cfg, tmp_path):
-    ensure_dirs(queue_cfg.root)
-    (tmp_path / "inbox" / "foo.md").write_text("please pong")
+async def test_legacy_inbox_files_migrated_on_startup(tmp_path):
+    """Pre-thread inbox/ .md files are migrated into threads/ on first run."""
+    cfg = QueueConfig(
+        enabled=True, root=tmp_path,
+        poll_interval_seconds=0.05, max_concurrent=1,
+        max_retries=0, retry_backoff_seconds=0.0,
+        max_iterations=5, drain_timeout_seconds=2.0,
+    )
+    # Simulate a legacy inbox file (pre-thread-store era).
+    (tmp_path / "inbox").mkdir(parents=True)
+    (tmp_path / "inbox" / "old.md").write_text("legacy prompt", encoding="utf-8")
 
-    rt = _StubRuntime(lambda: _ScriptedClient(ChatResponse(content="pong")))
-    worker = JobQueueWorker(rt, queue_cfg)
+    store = ThreadStore(cfg.root / "threads")
+    rt = _StubRuntime(lambda: _ScriptedClient(ChatResponse(content="migrated")), store)
+    # Constructing the worker triggers migration.
+    worker = JobQueueWorker(rt, cfg, thread_store=store)
+    # inbox/ should now be gone (migrated into threads/).
+    assert not (tmp_path / "inbox" / "old.md").exists()
+
     task = asyncio.create_task(worker.run())
     try:
-        ok = await _wait_until(lambda: (tmp_path / "done" / "foo.md").exists())
-        assert ok
+        # Wait for the migrated turn to complete.
+        ok = await _wait_until(
+            lambda: any(
+                read_status(td) == "done"
+                for t_dir in (tmp_path / "threads").iterdir()
+                if t_dir.is_dir()
+                for td in (t_dir / "turns").iterdir()
+                if td.is_dir()
+            ),
+            timeout=3.0,
+        )
+        assert ok, "migrated job never completed"
     finally:
         await worker.drain(timeout=1.0)
         task.cancel()
@@ -421,33 +448,3 @@ async def test_finalize_writes_prompt_sidecar_to_done(queue_cfg, tmp_path):
             await task
         except asyncio.CancelledError:
             pass
-
-    prompt_sidecar = tmp_path / "done" / "foo.prompt.md"
-    assert prompt_sidecar.is_file()
-    assert prompt_sidecar.read_text(encoding="utf-8") == "please pong"
-
-
-@pytest.mark.asyncio
-async def test_finalize_writes_prompt_sidecar_to_failed(queue_cfg, tmp_path):
-    from llama_agents.errors import LlamaProtocolError
-
-    ensure_dirs(queue_cfg.root)
-    (tmp_path / "inbox" / "boom.md").write_text("trigger error")
-
-    rt = _StubRuntime(lambda: _ErroringClient(LlamaProtocolError("bad shape")))
-    worker = JobQueueWorker(rt, queue_cfg)
-    task = asyncio.create_task(worker.run())
-    try:
-        ok = await _wait_until(lambda: (tmp_path / "failed" / "boom.md").exists())
-        assert ok
-    finally:
-        await worker.drain(timeout=1.0)
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-    prompt_sidecar = tmp_path / "failed" / "boom.prompt.md"
-    assert prompt_sidecar.is_file()
-    assert prompt_sidecar.read_text(encoding="utf-8") == "trigger error"
