@@ -86,7 +86,7 @@ class SpawnSubagentTool(Tool):
             iterations = 0
             tool_calls = 0
             final_text = ""
-            async for ev in subagent.run(args["task"], opts, run_id=parent_rid):
+            async for ev in subagent.run(args["task"], opts, thread_id=parent_rid):
                 if isinstance(ev, ToolCallStart):
                     tool_calls += 1
                 elif isinstance(ev, AssistantChunk):

@@ -528,3 +528,41 @@ async def test_reviewer_count_zero_yields_loop_error_no_crash():
     assert errors[0].error_type == "ValueError"
     assert "reviewer_count" in errors[0].message
     assert len(accepted) == 0
+
+
+async def test_agent_hydrates_prior_messages():
+    """When prior_messages is non-empty, the agent's messages start with
+    system + prior_messages + new user prompt."""
+    prior = [
+        {"role": "user", "content": "first turn"},
+        {"role": "assistant", "content": "first answer"},
+    ]
+    client = ScriptedClient([ChatResponse(content="second answer")])
+    agent = Agent(client=client, registry=_registry_with_echo())
+    events = await _collect(agent.run(
+        "second turn",
+        AgentRunOptions(max_iterations=3),
+        prior_messages=prior,
+    ))
+    # The first chat call's messages should be: [system, prior..., new user]
+    sent = client.calls[0]["messages"]
+    roles = [m["role"] for m in sent]
+    assert roles == ["system", "user", "assistant", "user"]
+    assert sent[1]["content"] == "first turn"
+    assert sent[2]["content"] == "first answer"
+    assert sent[3]["content"] == "second turn"
+    assert any(isinstance(e, Done) and e.reason == "finished" for e in events)
+
+
+async def test_agent_with_empty_prior_messages_behaves_like_one_shot():
+    client = ScriptedClient([ChatResponse(content="answer")])
+    agent = Agent(client=client, registry=_registry_with_echo())
+    events = await _collect(agent.run(
+        "go",
+        AgentRunOptions(max_iterations=3),
+        prior_messages=[],
+    ))
+    sent = client.calls[0]["messages"]
+    roles = [m["role"] for m in sent]
+    assert roles == ["system", "user"]
+    assert sent[1]["content"] == "go"

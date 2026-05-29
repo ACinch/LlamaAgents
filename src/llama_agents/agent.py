@@ -178,11 +178,15 @@ class Agent:
         self._cancel.set()
 
     async def run(
-        self, user_prompt: str, opts: AgentRunOptions, *,
-        run_id: str | None = None,
+        self,
+        user_prompt: str,
+        opts: AgentRunOptions,
+        *,
+        thread_id: str | None = None,
+        prior_messages: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[Event]:
         import uuid
-        self._thread_id = run_id or uuid.uuid4().hex[:24]
+        self._thread_id = thread_id or uuid.uuid4().hex[:24]
         self._memory.start_run(self._thread_id)
         token = _ACTIVE_THREAD_ID.set(self._thread_id)
         try:
@@ -199,10 +203,17 @@ class Agent:
                             f"{user_prompt}"
                         )
 
-            self.messages = [
-                {"role": "system", "content": opts.system_prompt},
-                {"role": "user", "content": effective_prompt},
-            ]
+            if prior_messages:
+                self.messages = [
+                    {"role": "system", "content": opts.system_prompt},
+                    *prior_messages,
+                    {"role": "user", "content": effective_prompt},
+                ]
+            else:
+                self.messages = [
+                    {"role": "system", "content": opts.system_prompt},
+                    {"role": "user", "content": effective_prompt},
+                ]
             for _ in range(opts.max_iterations):
                 if self._cancel.is_set():
                     yield Done(reason="cancelled")
@@ -464,7 +475,7 @@ class Agent:
             blob_id = await self._memory.store_plan(
                 task=user_prompt, plan=last_plan,
                 accepted_attempt=opts.max_planning_iterations,
-                thread_id=self._run_id,
+                thread_id=self._thread_id,
             )
         except Exception as e:  # noqa: BLE001
             import sys
