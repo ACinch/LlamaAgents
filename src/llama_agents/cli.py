@@ -160,6 +160,134 @@ def init(
         raise typer.Exit(code=1)
 
 
+threads_app = typer.Typer(no_args_is_help=True, help="Manage threads.")
+app.add_typer(threads_app, name="threads")
+
+
+_threads_config: Path | None = None
+
+
+@threads_app.callback(invoke_without_command=False)
+def threads_callback(
+    config: Path = typer.Option(_default_config_path, "--config", "-c"),
+) -> None:
+    """Threads subcommand group."""
+    global _threads_config
+    _threads_config = config
+
+
+def _get_threads_config() -> Path:
+    """Get config, preferring the one set by callback."""
+    if _threads_config is not None:
+        return _threads_config
+    return _default_config_path()
+
+
+@threads_app.command("list")
+def threads_list(
+    limit: int = typer.Option(20, "--limit"),
+) -> None:
+    """List threads, newest first."""
+    from .thread.store import ThreadStore
+    from .runtime import _resolve_queue_root
+
+    config = _get_threads_config()
+    cfg = load_config(config)
+    threads_root = _resolve_queue_root(cfg) / "threads"
+    threads_root.mkdir(parents=True, exist_ok=True)
+    store = ThreadStore(threads_root)
+    metas = store.list_threads(limit=limit)
+    if not metas:
+        typer.echo("No threads yet.")
+        return
+    # 4-column table
+    typer.echo(f"{'ID':<10}{'Title':<50}{'Turns':>6}  {'Updated'}")
+    for m in metas:
+        title = (m.title[:47] + "...") if len(m.title) > 50 else m.title
+        typer.echo(f"{m.id[:8]:<10}{title:<50}{m.current_turn:>6}  {m.updated_at}")
+
+
+@threads_app.command("show")
+def threads_show(
+    thread: str = typer.Argument(...),
+    full: bool = typer.Option(False, "--full"),
+) -> None:
+    """Render every turn in a thread."""
+    from .thread.ids import resolve_prefix, AmbiguousPrefix, UnknownPrefix
+    from .thread.meta import read_meta
+    from .thread.status import read_status
+    from .thread.store import ThreadStore
+    from .runtime import _resolve_queue_root
+
+    config = _get_threads_config()
+    cfg = load_config(config)
+    threads_root = _resolve_queue_root(cfg) / "threads"
+    store = ThreadStore(threads_root)
+    try:
+        tid = resolve_prefix(threads_root, thread)
+    except (UnknownPrefix, AmbiguousPrefix) as e:
+        typer.echo(str(e))
+        raise typer.Exit(code=2)
+    meta = read_meta(threads_root, tid)
+    typer.echo(f"{meta.title} ({tid})")
+    for n in range(1, meta.current_turn + 1):
+        td = store.turn_dir(tid, n)
+        status = read_status(td) or "unknown"
+        typer.echo(f"\n── Turn {n} — {status} ──")
+        prompt_p = td / "prompt.md"
+        if prompt_p.is_file():
+            typer.echo("Prompt:")
+            typer.echo(prompt_p.read_text(encoding="utf-8"))
+        result_p = td / "result.md"
+        if result_p.is_file():
+            typer.echo("Result:")
+            typer.echo(result_p.read_text(encoding="utf-8"))
+        error_p = td / "error.txt"
+        if error_p.is_file():
+            typer.echo(error_p.read_text(encoding="utf-8"))
+
+
+@threads_app.command("rerun")
+def threads_rerun(
+    thread: str = typer.Argument(...),
+    turn: int = typer.Argument(...),
+    edit: str | None = typer.Option(None, "--edit"),
+) -> None:
+    """Fork a thread by rerunning turn N, optionally with an edited prompt."""
+    from .thread.ids import resolve_prefix, AmbiguousPrefix, UnknownPrefix
+    from .thread.meta import read_meta
+    from .thread.status import set_status
+    from .thread.store import ThreadStore
+    from .runtime import _resolve_queue_root
+
+    config = _get_threads_config()
+    cfg = load_config(config)
+    threads_root = _resolve_queue_root(cfg) / "threads"
+    store = ThreadStore(threads_root)
+    try:
+        parent_id = resolve_prefix(threads_root, thread)
+    except (UnknownPrefix, AmbiguousPrefix) as e:
+        typer.echo(str(e))
+        raise typer.Exit(code=2)
+    parent_meta = read_meta(threads_root, parent_id)
+    if turn < 1 or turn > parent_meta.current_turn:
+        typer.echo(f"turn {turn} out of range")
+        raise typer.Exit(code=2)
+
+    orig_prompt = (store.turn_dir(parent_id, turn) / "prompt.md").read_text(
+        encoding="utf-8",
+    )
+    new_prompt = (edit or "").strip() or orig_prompt
+    new_tid = store.create_thread(
+        title=new_prompt.strip().splitlines()[0][:60],
+        parent_thread_id=parent_id,
+        parent_turn_idx=turn - 1,
+    )
+    (store.turn_dir(new_tid, 1) / "prompt.md").write_text(new_prompt, encoding="utf-8")
+    set_status(store.turn_dir(new_tid, 1), "queued")
+    typer.echo(f"Forked → thread {new_tid} (queued; will run via worker or `chat -t {new_tid[:8]}`)")
+
+
 async def _run_chat_in_process(cfg, thread_id, turn_idx, turn_dir, prompt,
                                max_iterations, store):
     import json as _json

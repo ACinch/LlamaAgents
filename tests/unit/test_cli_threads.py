@@ -53,3 +53,40 @@ def test_chat_thread_continue_refuses_when_prior_running(cfg_file, tmp_path):
     ])
     assert result.exit_code == 3
     assert "active turn" in result.stdout.lower() or "active turn" in result.stderr.lower()
+
+
+def test_threads_list_shows_threads(cfg_file, tmp_path):
+    from llama_agents.thread.store import ThreadStore
+    threads_root = tmp_path / "q" / "threads"
+    threads_root.mkdir(parents=True)
+    store = ThreadStore(threads_root)
+    a = store.create_thread(title="alpha")
+    b = store.create_thread(title="beta")
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["threads", "--config", str(cfg_file), "list"])
+    assert result.exit_code == 0
+    assert a[:8] in result.stdout
+    assert b[:8] in result.stdout
+    assert "alpha" in result.stdout
+    assert "beta" in result.stdout
+
+
+def test_threads_show_renders_turns(cfg_file, tmp_path):
+    from llama_agents.thread.store import ThreadStore
+    from llama_agents.thread.status import set_status
+    threads_root = tmp_path / "q" / "threads"
+    threads_root.mkdir(parents=True)
+    store = ThreadStore(threads_root)
+    tid = store.create_thread(title="t")
+    (store.turn_dir(tid, 1) / "prompt.md").write_text("ask X", encoding="utf-8")
+    (store.turn_dir(tid, 1) / "result.md").write_text("answer Y", encoding="utf-8")
+    set_status(store.turn_dir(tid, 1), "done")
+
+    runner = CliRunner()
+    result = runner.invoke(app, [
+        "threads", "--config", str(cfg_file), "show", tid[:8],
+    ])
+    assert result.exit_code == 0
+    assert "ask X" in result.stdout
+    assert "answer Y" in result.stdout
