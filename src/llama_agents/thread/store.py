@@ -142,6 +142,27 @@ class ThreadStore:
         )
         _os.replace(tmp, p)
 
+    def read_messages_with_ancestry(self, thread_id: str) -> list[dict]:
+        """Read this thread's messages.jsonl, prepended with all ancestors'
+        messages (root-most first).
+
+        For a fork, the child's messages.jsonl starts empty; this method
+        returns the parent's full message history so the agent's prior_messages
+        hydration includes everything the parent saw up to the fork point.
+
+        For a non-fork (parent_thread_id is None), returns just the thread's
+        own messages.
+        """
+        from .meta import read_meta  # already imported at module level but fine
+        chain = self.ancestor_chain(thread_id)
+        # ancestor_chain returns [parent, grandparent, ..., root]; we want
+        # root-first so the message order makes sense chronologically.
+        ordered = list(reversed(chain)) + [thread_id]
+        out: list[dict] = []
+        for tid in ordered:
+            out.extend(self.read_messages(tid))
+        return out
+
     # ---------- ancestor walking ----------
 
     _MAX_ANCESTOR_DEPTH = 32

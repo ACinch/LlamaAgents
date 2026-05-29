@@ -408,6 +408,69 @@ async def test_new_worker_reverts_processing_turns_to_queued(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_worker_fork_inherits_parent_messages(queue_cfg, tmp_path):
+    """A fork thread submitted to the worker should run with the parent's
+    messages hydrated, not an empty context."""
+    from llama_agents.thread.status import set_status
+    from llama_agents.thread.store import ThreadStore
+
+    threads_root = queue_cfg.root / "threads"
+    threads_root.mkdir(parents=True)
+    store = ThreadStore(threads_root)
+
+    # Parent thread with one completed turn whose messages were already
+    # appended to messages.jsonl
+    parent = store.create_thread(title="parent")
+    store.append_messages(parent, [
+        {"role": "user", "content": "say x"},
+        {"role": "assistant", "content": "x"},
+    ])
+    set_status(store.turn_dir(parent, 1), "done")
+
+    # Fork
+    child = store.create_thread(
+        title="child fork", parent_thread_id=parent, parent_turn_idx=1,
+    )
+    (store.turn_dir(child, 1) / "prompt.md").write_text("now what?", encoding="utf-8")
+    set_status(store.turn_dir(child, 1), "queued")
+
+    # Capture what the client sees when chat() is called
+    seen_messages: list[list[dict]] = []
+
+    class _CaptureClient:
+        async def chat(self, *, messages, tools, temperature=0.2,
+                       reasoning_budget_tokens=None):
+            seen_messages.append(list(messages))
+            return ChatResponse(content="forked reply")
+
+    rt = _StubRuntime(lambda: _CaptureClient(), store)
+    worker = JobQueueWorker(rt, queue_cfg, thread_store=store)
+    task = asyncio.create_task(worker.run())
+    try:
+        ok = await _wait_until(
+            lambda: read_status(store.turn_dir(child, 1)) == "done",
+            timeout=2.0,
+        )
+        assert ok, "fork turn never completed"
+    finally:
+        await worker.drain(timeout=1.0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    # First call to the agent's client should have the parent's messages
+    # already present.
+    assert seen_messages, "client was never called"
+    first = seen_messages[0]
+    contents = [m.get("content") for m in first]
+    assert "say x" in contents
+    assert "x" in contents
+    assert "now what?" in contents
+
+
+@pytest.mark.asyncio
 async def test_legacy_inbox_files_migrated_on_startup(tmp_path):
     """Pre-thread inbox/ .md files are migrated into threads/ on first run."""
     cfg = QueueConfig(

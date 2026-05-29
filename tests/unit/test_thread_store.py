@@ -130,6 +130,43 @@ def test_ancestor_chain_linear(tmp_path: Path):
     assert store.ancestor_chain(c) == [b, a]
 
 
+def test_read_messages_with_ancestry_walks_chain(tmp_path: Path):
+    """A fork's read_messages_with_ancestry should include parent messages
+    before the fork's own messages."""
+    store = ThreadStore(tmp_path)
+    parent = store.create_thread(title="parent")
+    store.append_messages(parent, [
+        {"role": "user", "content": "p-1"},
+        {"role": "assistant", "content": "p-1 reply"},
+    ])
+    child = store.create_thread(
+        title="child", parent_thread_id=parent, parent_turn_idx=1,
+    )
+    store.append_messages(child, [
+        {"role": "user", "content": "c-1"},
+    ])
+    msgs = store.read_messages_with_ancestry(child)
+    # Order: root-first → child-last
+    assert [m["content"] for m in msgs] == ["p-1", "p-1 reply", "c-1"]
+
+
+def test_read_messages_with_ancestry_for_non_fork_equals_read_messages(tmp_path: Path):
+    """Without a parent, read_messages_with_ancestry returns the same thing
+    as read_messages."""
+    store = ThreadStore(tmp_path)
+    tid = store.create_thread(title="solo")
+    store.append_messages(tid, [
+        {"role": "user", "content": "hi"},
+    ])
+    assert store.read_messages_with_ancestry(tid) == store.read_messages(tid)
+
+
+def test_read_messages_with_ancestry_empty_root_returns_empty(tmp_path: Path):
+    store = ThreadStore(tmp_path)
+    tid = store.create_thread(title="empty")
+    assert store.read_messages_with_ancestry(tid) == []
+
+
 def test_ancestor_chain_capped_at_depth(tmp_path: Path):
     """Defensive cap: a malformed cyclic chain should not infinite-loop."""
     store = ThreadStore(tmp_path)

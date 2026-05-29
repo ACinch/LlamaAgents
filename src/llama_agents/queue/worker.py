@@ -154,7 +154,7 @@ class JobQueueWorker:
         prompt = (turn_dir / "prompt.md").read_text(encoding="utf-8")
         agent = self._rt.new_agent()
         opts = AgentRunOptions(max_iterations=self._cfg.max_iterations)
-        prior = self._thread_store.read_messages(thread_id)
+        prior = self._thread_store.read_messages_with_ancestry(thread_id)
 
         events: list[dict[str, Any]] = []
         final_chunks: list[str] = []

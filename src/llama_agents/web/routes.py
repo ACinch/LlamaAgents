@@ -296,7 +296,8 @@ def register_routes(
 
     repo_root = config_path.parent
 
-    threads_root = Path(cfg.queue.root) / "threads"
+    from ..runtime import _resolve_queue_root
+    threads_root = _resolve_queue_root(cfg) / "threads"
     thread_store = ThreadStore(threads_root)
 
     app.mount(

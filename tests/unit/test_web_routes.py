@@ -530,6 +530,39 @@ async def test_patch_thread_updates_title(cfg, config_path):
     assert read_meta(threads_root, tid).title == "renamed"
 
 
+# ---------- I1: queue root resolution ----------
+
+@pytest.mark.asyncio
+async def test_thread_routes_use_resolved_queue_root(tmp_path: Path):
+    """If queue.root is relative, the web routes should resolve it against
+    sandbox.allowed_dirs[0], matching what the worker and CLI do."""
+    cfg_rel = Config(
+        llama=LlamaConfig(auto_spawn=False),
+        sandbox=SandboxConfig(allowed_dirs=[tmp_path]),
+        queue=QueueConfig(
+            enabled=False,
+            root=Path(".llama_agents/queue"),  # relative — should resolve
+        ),
+    )
+    config_path_rel = tmp_path / "config.toml"
+    config_path_rel.write_text("[llama]\nauto_spawn = false\n", encoding="utf-8")
+    app = create_app(cfg_rel, client_factory=lambda url: _FakeClient(),
+                     config_path=config_path_rel)
+
+    # Pre-create a thread at the resolved path
+    resolved_threads = tmp_path / ".llama_agents" / "queue" / "threads"
+    resolved_threads.mkdir(parents=True)
+    store = ThreadStore(resolved_threads)
+    store.create_thread(title="findable")
+
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            r = await ac.get("/threads")
+            assert r.status_code == 200
+            assert "findable" in r.text
+
+
 # ---------- internal helpers ----------
 
 def test_event_style_includes_reviewer_verdict():

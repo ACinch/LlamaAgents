@@ -296,7 +296,7 @@ async def _run_chat_in_process(cfg, thread_id, turn_idx, turn_dir, prompt,
     try:
         agent = rt.new_agent()
         opts = AgentRunOptions(max_iterations=max_iterations)
-        prior = store.read_messages(thread_id)
+        prior = store.read_messages_with_ancestry(thread_id)
         events: list[dict] = []
         final_chunks: list[str] = []
         had_error = False
