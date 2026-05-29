@@ -105,3 +105,62 @@ class ThreadStore:
         candidates.sort()
         _, tid, idx = candidates[0]
         return tid, idx
+
+    # ---------- messages.jsonl ----------
+
+    def _messages_path(self, thread_id: str) -> Path:
+        return self._root / thread_id / "messages.jsonl"
+
+    def read_messages(self, thread_id: str) -> list[dict]:
+        import json as _json
+        p = self._messages_path(thread_id)
+        if not p.is_file():
+            return []
+        out: list[dict] = []
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(_json.loads(line))
+            except _json.JSONDecodeError:
+                continue
+        return out
+
+    def append_messages(self, thread_id: str, new_msgs: list[dict]) -> None:
+        import json as _json
+        import os as _os
+        if not new_msgs:
+            return
+        p = self._messages_path(thread_id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        existing = p.read_text(encoding="utf-8") if p.is_file() else ""
+        appended = "\n".join(_json.dumps(m, ensure_ascii=False) for m in new_msgs)
+        tmp = p.with_suffix(".jsonl.tmp")
+        tmp.write_text(
+            existing + appended + "\n", encoding="utf-8"
+        )
+        _os.replace(tmp, p)
+
+    # ---------- ancestor walking ----------
+
+    _MAX_ANCESTOR_DEPTH = 32
+
+    def ancestor_chain(self, thread_id: str) -> list[str]:
+        """Return ancestor thread ids walking parent_thread_id, root first.
+
+        Defensive depth cap of 32 prevents infinite loops on malformed
+        cyclic metadata.
+        """
+        chain: list[str] = []
+        seen: set[str] = {thread_id}
+        cur = thread_id
+        for _ in range(self._MAX_ANCESTOR_DEPTH):
+            meta = read_meta(self._root, cur)
+            parent = meta.parent_thread_id
+            if not parent or parent in seen:
+                break
+            chain.append(parent)
+            seen.add(parent)
+            cur = parent
+        return chain

@@ -91,3 +91,55 @@ def test_next_queued_turn_returns_none_when_nothing_queued(tmp_path: Path):
     tid = store.create_thread(title="x")
     set_status(store.turn_dir(tid, 1), "done")
     assert store.next_queued_turn() is None
+
+
+def test_read_messages_returns_empty_when_no_file(tmp_path: Path):
+    store = ThreadStore(tmp_path)
+    tid = store.create_thread(title="t")
+    assert store.read_messages(tid) == []
+
+
+def test_append_then_read_roundtrip(tmp_path: Path):
+    store = ThreadStore(tmp_path)
+    tid = store.create_thread(title="t")
+    store.append_messages(tid, [
+        {"role": "system", "content": "you are X"},
+        {"role": "user", "content": "hello"},
+    ])
+    store.append_messages(tid, [{"role": "assistant", "content": "hi"}])
+    msgs = store.read_messages(tid)
+    assert len(msgs) == 3
+    assert msgs[0]["role"] == "system"
+    assert msgs[2]["content"] == "hi"
+
+
+def test_append_messages_empty_list_is_noop(tmp_path: Path):
+    store = ThreadStore(tmp_path)
+    tid = store.create_thread(title="t")
+    store.append_messages(tid, [])
+    assert store.read_messages(tid) == []
+
+
+def test_ancestor_chain_linear(tmp_path: Path):
+    store = ThreadStore(tmp_path)
+    a = store.create_thread(title="root")
+    b = store.create_thread(title="b", parent_thread_id=a, parent_turn_idx=1)
+    c = store.create_thread(title="c", parent_thread_id=b, parent_turn_idx=1)
+    assert store.ancestor_chain(a) == []
+    assert store.ancestor_chain(b) == [a]
+    assert store.ancestor_chain(c) == [b, a]
+
+
+def test_ancestor_chain_capped_at_depth(tmp_path: Path):
+    """Defensive cap: a malformed cyclic chain should not infinite-loop."""
+    store = ThreadStore(tmp_path)
+    a = store.create_thread(title="a")
+    # Manually corrupt: make a's parent point to itself.
+    from llama_agents.thread.meta import read_meta, write_meta
+    m = read_meta(tmp_path, a)
+    m.parent_thread_id = a
+    m.parent_turn_idx = 1
+    write_meta(tmp_path, m)
+    # ancestor_chain should terminate (defensive cap) rather than spin.
+    chain = store.ancestor_chain(a)
+    assert len(chain) <= 32
