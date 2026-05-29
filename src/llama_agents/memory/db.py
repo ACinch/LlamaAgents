@@ -36,31 +36,64 @@ class VectorDB:
             self._conn = sqlite3.connect(self._path)
             self._conn.execute("PRAGMA journal_mode = WAL")
             self._conn.execute("PRAGMA foreign_keys = ON")
+            ver = self._conn.execute("PRAGMA user_version").fetchone()[0]
+            if ver < 1:
+                self._migrate_to_v1()
+            else:
+                self._create_schema_v1_if_absent()
+            self._conn.commit()
+
+    def _create_schema_v1_if_absent(self) -> None:
+        assert self._conn is not None
+        self._conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS blobs (
+              id            TEXT PRIMARY KEY,
+              scope         TEXT NOT NULL,
+              thread_id     TEXT,
+              kind          TEXT NOT NULL,
+              title         TEXT NOT NULL,
+              file_path     TEXT NOT NULL,
+              metadata_json TEXT,
+              created_at    TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_blobs_scope_thread
+                ON blobs(scope, thread_id);
+            CREATE TABLE IF NOT EXISTS chunks (
+              id        TEXT PRIMARY KEY,
+              blob_id   TEXT NOT NULL REFERENCES blobs(id) ON DELETE CASCADE,
+              chunk_idx INTEGER NOT NULL,
+              text      TEXT NOT NULL,
+              embedding BLOB NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_chunks_blob ON chunks(blob_id);
+            PRAGMA user_version = 1;
+            """
+        )
+
+    def _migrate_to_v1(self) -> None:
+        """Either create the v1 schema from scratch (no blobs table yet) or
+        rename run_id -> thread_id in an existing v0 database."""
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='blobs'"
+        ).fetchone()
+        if row is None:
+            self._create_schema_v1_if_absent()
+            return
+        cols = [r[1] for r in self._conn.execute(
+            "PRAGMA table_info(blobs)"
+        ).fetchall()]
+        if "run_id" in cols:
             self._conn.executescript(
                 """
-                CREATE TABLE IF NOT EXISTS blobs (
-                  id            TEXT PRIMARY KEY,
-                  scope         TEXT NOT NULL,
-                  run_id        TEXT,
-                  kind          TEXT NOT NULL,
-                  title         TEXT NOT NULL,
-                  file_path     TEXT NOT NULL,
-                  metadata_json TEXT,
-                  created_at    TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_blobs_scope_run
-                    ON blobs(scope, run_id);
-                CREATE TABLE IF NOT EXISTS chunks (
-                  id        TEXT PRIMARY KEY,
-                  blob_id   TEXT NOT NULL REFERENCES blobs(id) ON DELETE CASCADE,
-                  chunk_idx INTEGER NOT NULL,
-                  text      TEXT NOT NULL,
-                  embedding BLOB NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_chunks_blob ON chunks(blob_id);
+                ALTER TABLE blobs RENAME COLUMN run_id TO thread_id;
+                DROP INDEX IF EXISTS idx_blobs_scope_run;
+                CREATE INDEX IF NOT EXISTS idx_blobs_scope_thread
+                    ON blobs(scope, thread_id);
                 """
             )
-            self._conn.commit()
+        self._conn.execute("PRAGMA user_version = 1")
 
     async def insert_blob(
         self,
@@ -71,9 +104,9 @@ class VectorDB:
         async with self._lock:
             assert self._conn is not None
             self._conn.execute(
-                "INSERT INTO blobs (id, scope, run_id, kind, title, file_path, "
+                "INSERT INTO blobs (id, scope, thread_id, kind, title, file_path, "
                 "metadata_json, created_at) VALUES (?,?,?,?,?,?,?,?)",
-                (meta.id, meta.scope, meta.run_id, meta.kind, meta.title,
+                (meta.id, meta.scope, meta.thread_id, meta.kind, meta.title,
                  meta.file_path, json.dumps(meta.metadata), meta.created_at),
             )
             for idx, (cid, vec, txt) in enumerate(chunks):
@@ -94,38 +127,38 @@ class VectorDB:
             self._conn.execute("DELETE FROM blobs WHERE id = ?", (blob_id,))
             self._conn.commit()
 
-    async def delete_blobs_for_run(self, run_id: str) -> list[str]:
+    async def delete_blobs_for_thread(self, thread_id: str) -> list[str]:
         async with self._lock:
             assert self._conn is not None
             rows = self._conn.execute(
-                "SELECT id, file_path FROM blobs WHERE run_id = ?", (run_id,)
+                "SELECT id, file_path FROM blobs WHERE thread_id = ?", (thread_id,)
             ).fetchall()
-            self._conn.execute("DELETE FROM blobs WHERE run_id = ?", (run_id,))
+            self._conn.execute("DELETE FROM blobs WHERE thread_id = ?", (thread_id,))
             self._conn.commit()
             return [r[1] for r in rows]
 
     async def list_blobs(
-        self, *, scope: str, run_id: str | None = None
+        self, *, scope: str, thread_id: str | None = None
     ) -> list[BlobMeta]:
         async with self._lock:
             assert self._conn is not None
-            if scope == "run" and run_id is not None:
+            if scope == "run" and thread_id is not None:
                 rows = self._conn.execute(
-                    "SELECT id, scope, run_id, kind, title, file_path, "
+                    "SELECT id, scope, thread_id, kind, title, file_path, "
                     "metadata_json, created_at FROM blobs "
-                    "WHERE scope = 'run' AND run_id = ? ORDER BY created_at",
-                    (run_id,),
+                    "WHERE scope = 'run' AND thread_id = ? ORDER BY created_at",
+                    (thread_id,),
                 ).fetchall()
             else:
                 rows = self._conn.execute(
-                    "SELECT id, scope, run_id, kind, title, file_path, "
+                    "SELECT id, scope, thread_id, kind, title, file_path, "
                     "metadata_json, created_at FROM blobs "
                     "WHERE scope = ? ORDER BY created_at",
                     (scope,),
                 ).fetchall()
         return [
             BlobMeta(
-                id=r[0], scope=r[1], run_id=r[2], kind=r[3], title=r[4],
+                id=r[0], scope=r[1], thread_id=r[2], kind=r[3], title=r[4],
                 file_path=r[5],
                 metadata=json.loads(r[6]) if r[6] else {},
                 created_at=r[7],
@@ -133,7 +166,7 @@ class VectorDB:
             for r in rows
         ]
 
-    async def list_expired_run_ids(
+    async def list_expired_thread_ids(
         self, *, now_iso: str, retention_hours: int
     ) -> list[str]:
         if retention_hours < 0:
@@ -144,8 +177,8 @@ class VectorDB:
         async with self._lock:
             assert self._conn is not None
             rows = self._conn.execute(
-                "SELECT DISTINCT run_id FROM blobs "
-                "WHERE scope = 'run' AND run_id IS NOT NULL "
+                "SELECT DISTINCT thread_id FROM blobs "
+                "WHERE scope = 'run' AND thread_id IS NOT NULL "
                 "AND created_at < ?",
                 (cutoff_iso,),
             ).fetchall()
@@ -156,7 +189,7 @@ class VectorDB:
         query_vec: list[float],
         *,
         scope: str,
-        run_id: str | None = None,
+        thread_id: str | None = None,
         blob_id: str | None = None,
         k: int = 5,
     ) -> list[tuple[str, str, float, str, str, str, int]]:
@@ -177,18 +210,18 @@ class VectorDB:
             else:
                 if scope == "run":
                     sql += " AND b.scope = 'run'"
-                    if run_id is not None:
-                        sql += " AND b.run_id = ?"
-                        params.append(run_id)
+                    if thread_id is not None:
+                        sql += " AND b.thread_id = ?"
+                        params.append(thread_id)
                 elif scope == "plans":
                     sql += " AND b.scope = 'plans'"
                 elif scope == "all":
-                    if run_id is not None:
+                    if thread_id is not None:
                         sql += (
                             " AND (b.scope = 'plans' OR "
-                            "(b.scope = 'run' AND b.run_id = ?))"
+                            "(b.scope = 'run' AND b.thread_id = ?))"
                         )
-                        params.append(run_id)
+                        params.append(thread_id)
                     else:
                         sql += " AND b.scope = 'plans'"
             rows = self._conn.execute(sql, params).fetchall()

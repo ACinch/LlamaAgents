@@ -21,7 +21,7 @@ class RecalledChunk:
 class BlobMeta:
     id: str
     scope: str
-    run_id: str | None
+    thread_id: str | None     # renamed from run_id
     kind: str
     title: str
     file_path: str
