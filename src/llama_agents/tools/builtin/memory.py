@@ -9,10 +9,10 @@ from ..base import Tool
 class MemoryRecallTool(Tool):
     name = "memory_recall"
     description = (
-        "Retrieve previously-stored content from this run's scratch memory "
-        "and past plans. Use this when you see '[evicted to memory ...]' in "
-        "earlier tool results, or to look up the full text of a subagent's "
-        "output via its memory_handle."
+        "Retrieve previously-stored content from this thread's scratch "
+        "memory, ancestor threads' memory, and past plans. Use this when "
+        "you see '[evicted to memory ...]' in earlier tool results, or to "
+        "look up the full text of a subagent's output via its memory_handle."
     )
     json_schema = {
         "type": "object",
@@ -31,17 +31,24 @@ class MemoryRecallTool(Tool):
         self,
         *,
         store: MemoryStore,
-        run_id_getter: Callable[[], str | None],
+        thread_id_getter: Callable[[], str | None],
+        thread_store=None,
     ) -> None:
         self._store = store
-        self._run_id_getter = run_id_getter
+        self._thread_id_getter = thread_id_getter
+        self._thread_store = thread_store
 
     async def invoke(self, args: dict[str, Any]) -> dict[str, Any]:
-        rid = self._run_id_getter()
+        tid = self._thread_id_getter()
+        thread_ids: list[str] = []
+        if tid:
+            thread_ids.append(tid)
+            if self._thread_store is not None:
+                thread_ids.extend(self._thread_store.ancestor_chain(tid))
         chunks = await self._store.recall(
             query=args["query"],
             scope="all",
-            run_id=rid,
+            thread_ids=thread_ids if thread_ids else None,
             handle=args.get("handle"),
             k=int(args.get("k", 5)),
         )

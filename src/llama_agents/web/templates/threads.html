@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Llama Agents — Threads{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Threads</h1>
+</div>
+<div class="card">
+    {% if threads %}
+    <ul class="thread-list">
+        {% for t in threads %}
+        <li>
+            <a href="/threads/{{ t.id }}">
+                <div class="thread-title">{{ t.title }}</div>
+                <div class="thread-meta muted">
+                    {{ t.current_turn }} turn{{ "s" if t.current_turn != 1 else "" }}
+                    · {{ t.updated_at | fmt_ts }}
+                </div>
+            </a>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <div class="empty-state">No threads yet. Submit a prompt from the Activity page.</div>
+    {% endif %}
+</div>
+{% endblock %}

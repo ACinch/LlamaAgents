@@ -44,7 +44,7 @@ def create_app(
         runtime_box["rt"] = rt
         if cfg.queue.enabled:
             resolved_queue = cfg.queue.model_copy(update={"root": _resolve_queue_root(cfg)})
-            worker = JobQueueWorker(rt, resolved_queue)
+            worker = JobQueueWorker(rt, resolved_queue, thread_store=rt.thread_store)
             worker_box["worker"] = worker
             worker_task_box["task"] = asyncio.create_task(worker.run())
         try:

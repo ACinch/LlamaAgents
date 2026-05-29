@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable
 
-from ...agent import Agent, AgentRunOptions, get_active_run_id
+from ...agent import Agent, AgentRunOptions, get_active_thread_id
 from ...errors import AgentLimitExceeded
 from ...events import AssistantChunk, Done, ToolCallResult, ToolCallStart
 from ...memory.store import InertMemoryStore, MemoryStore
@@ -64,7 +64,7 @@ class SpawnSubagentTool(Tool):
         if not acquired:
             raise AgentLimitExceeded("max_concurrent_agents reached")
 
-        parent_rid = get_active_run_id()
+        parent_rid = get_active_thread_id()
         try:
             subagent = self._factory()
             allowed = args.get("allowed_tools")
@@ -86,7 +86,7 @@ class SpawnSubagentTool(Tool):
             iterations = 0
             tool_calls = 0
             final_text = ""
-            async for ev in subagent.run(args["task"], opts, run_id=parent_rid):
+            async for ev in subagent.run(args["task"], opts, thread_id=parent_rid):
                 if isinstance(ev, ToolCallStart):
                     tool_calls += 1
                 elif isinstance(ev, AssistantChunk):
@@ -107,7 +107,7 @@ class SpawnSubagentTool(Tool):
             try:
                 blob_id = await self._memory.store_blob(
                     kind="subagent_output", scope="run",
-                    run_id=parent_rid,
+                    thread_id=parent_rid,
                     title=f"subagent: {args['task'][:60]}",
                     body=final_text,
                     metadata={"task": args["task"], "iterations": iterations,

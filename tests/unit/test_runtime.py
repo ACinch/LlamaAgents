@@ -107,3 +107,17 @@ async def test_runtime_uses_inert_store_when_disabled(tmp_path, monkeypatch):
         assert "memory_recall" in rt.registry.names()  # tool registered either way
     finally:
         await rt.aclose()
+
+
+@pytest.mark.asyncio
+async def test_runtime_exposes_thread_store(tmp_path: Path):
+    from llama_agents.thread.store import ThreadStore
+    cfg = Config(
+        llama=LlamaConfig(auto_spawn=False),
+        sandbox=SandboxConfig(allowed_dirs=[tmp_path]),
+    )
+    rt = await Runtime.create(cfg, client_factory=lambda url: FakeClient())
+    try:
+        assert isinstance(rt.thread_store, ThreadStore)
+    finally:
+        await rt.aclose()
