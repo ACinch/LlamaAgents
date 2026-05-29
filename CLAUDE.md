@@ -89,10 +89,15 @@ shipping — see the table in `README.md`.
 | `runtime.py` | Factory: builds client, registry, bridge, agent factory. |
 | `cli.py` | `llamactl chat` / `llamactl serve`. |
 | `http_app.py` | FastAPI + SSE chat endpoint. |
+| `thread/ids.py` | Thread id minting + prefix resolution. |
+| `thread/meta.py` | ThreadMeta dataclass + JSON I/O. |
+| `thread/status.py` | Atomic per-turn status transitions. |
+| `thread/store.py` | ThreadStore: create, list, turn_dir, messages, ancestor chain. |
+| `thread/migration.py` | One-shot legacy inbox/done/failed → threads/. |
 | `queue/paths.py` | Atomic move + sweep helpers for queue folders. |
-| `queue/worker.py` | `JobQueueWorker`: polls inbox/, runs jobs, writes outputs. |
+| `queue/worker.py` | `JobQueueWorker`: polls inbox/, runs jobs, writes outputs; integrated with thread storage. |
 | `install.py` | `llamactl init` wizard: VRAM detect, model pick, config render. |
-| `web/routes.py` | FastAPI routes + Jinja2 templates for the dashboard / job / config UI. |
+| `web/routes.py` | FastAPI routes + Jinja2 templates for threads UI, activity dashboard, config view. |
 
 ### Agent.run() shape
 
@@ -251,9 +256,9 @@ and then subagents fan out per domain.
   across runs; large subagent outputs and overflow tool results are
   offloaded to a local SQLite + fastembed store; `memory_recall` retrieves
   them. See `docs/memory.md`.
-- **Queue worker has no priority / cron / control API.** Re-queuing is
-  a manual file move; status is "look at the folders". A future
-  `/queue/*` HTTP surface can be built later if needed.
+- **Thread worker has no priority / cron / control API.** Status is visible
+  in the web UI and CLI; manual intervention requires file moves or API
+  calls. A future control surface can be built later if needed.
 
 ## When you're editing this codebase
 

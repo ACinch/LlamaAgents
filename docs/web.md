@@ -7,9 +7,10 @@ passed (the CLI always does this). Open
 
 ## Pages
 
-- `/` — dashboard. Four panels (Inbox / Processing / Done / Failed)
-  polling every 2 seconds. Two submit forms at the top: file upload
-  (`.md`/`.txt`) and paste-prompt-as-text.
+- `/activity` — dashboard. Activity panel polling every 2 seconds.
+  Submit form at the top: file upload (`.md`/`.txt`) and paste-prompt-as-text.
+- `/threads` — list recent threads with turn counts; click to view a thread's
+  full conversation history.
 - `/jobs/{status}/{name}` — job detail. Shows the original prompt,
   the event timeline (collapsible), the final answer (for `done/`),
   and the error (for `failed/`).
@@ -17,20 +18,26 @@ passed (the CLI always does this). Open
   was launched with. Re-read on every request; edits show up
   immediately on refresh.
 
+## Threads
+
+Every job belongs to a thread. The Threads page (`/threads`) lists
+recent threads; click one to see all turns, continue the conversation,
+or rerun (fork) any past turn. See [`threads.md`](threads.md) for the
+full model.
+
 ## Submitting a job
 
-Two paths, both write a file into `<queue_root>/inbox/`:
+Two paths, both create a new thread:
 
-1. **File upload** — pick a `.md` or `.txt` file. The filename is
-   kept as-is (after safety validation).
-2. **Paste prompt** — type a filename (or leave blank to get
-   `task-<unix-ts>.md`) and the prompt body. The body is written
-   verbatim.
+Web: use the submit form on `/activity`.
 
-Validation: the filename must match `^[A-Za-z0-9._-]+$` (no spaces,
-no slashes, no Unicode), the extension must be in
-`cfg.queue.accepted_extensions`, and a duplicate name in `inbox/`
-is rejected.
+CLI: `uv run llamactl chat "task description"` creates a single-turn thread.
+
+Previously (old queue model): submissions wrote files into `<queue_root>/inbox/`:
+
+1. **File upload** — pick a `.md` or `.txt` file from your computer.
+2. **Paste prompt** — type a prompt or task description directly into
+   the form.
 
 ## Auto-refresh
 
@@ -46,9 +53,6 @@ air-gapped machine.
 
 ## Limitations
 
-- No re-queue button — to retry a failed job, move
-  `failed/<name>.md` back to `inbox/` (and the side-cars to keep
-  history, or delete them).
 - No syntax highlighting on `/config`.
 - No auth. Bind to `127.0.0.1` (the default) and don't expose to
   untrusted networks.

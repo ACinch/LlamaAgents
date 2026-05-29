@@ -54,3 +54,10 @@ to regenerate `config.toml` after editing helpers.
 - **Pinned llama.cpp release moved** → if the auto-download fails
   (404 or sha mismatch), the wizard tells you, and you can supply a
   path manually.
+
+## Migrating from a pre-thread checkout
+
+If you upgrade from a version before the threads refactor, any
+existing `inbox/`/`processing/`/`done/`/`failed/` files under your
+queue root are automatically migrated into single-turn threads when
+`llamactl serve` first runs. The migration is idempotent and safe.
